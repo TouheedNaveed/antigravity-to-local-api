@@ -20,7 +20,7 @@ const flag = (name, dflt) => { const v = (process.env[name] ?? "").trim().toLowe
 const HOST = process.env.HOST || "127.0.0.1";
 const PORT = Number(process.env.PORT || 8788);
 const API_KEY = process.env.AGY_API_KEY || "";
-const MAX_BODY_BYTES = 2 * 1024 * 1024;
+const MAX_BODY_BYTES = Math.max(1, Number(process.env.AGY_MAX_BODY_MB || 64)) * 1024 * 1024;
 const DATA_DIR = process.env.AGY_DATA_DIR || path.join(path.dirname(fileURLToPath(import.meta.url)), "data");
 // Default: a key is required for every /v1/* call. AGY_REQUIRE_KEY=0 only opens the API while no keys exist and no AGY_API_KEY is set.
 const REQUIRE_KEY = !["0", "off", "false", "no"].includes((process.env.AGY_REQUIRE_KEY ?? "1").trim().toLowerCase());
@@ -127,16 +127,17 @@ function readBody(req) {
   return new Promise((resolve, reject) => {
     let body = "";
     let bytes = 0;
+    let tooLarge = false;
     req.on("data", chunk => {
       bytes += chunk.length;
       if (bytes > MAX_BODY_BYTES) {
-        reject(Object.assign(new Error("Request body exceeds 2 MB limit"), { status: 413 }));
-        req.destroy();
-        return;
+        if (!tooLarge) { tooLarge = true; body = ""; }
+        return; // keep draining so the client gets a clean 413 instead of a reset
       }
       body += chunk.toString("utf8");
     });
     req.on("end", () => {
+      if (tooLarge) return reject(Object.assign(new Error(`Request body exceeds ${MAX_BODY_BYTES / 1048576} MB limit (AGY_MAX_BODY_MB)`), { status: 413 }));
       try { resolve(JSON.parse(body || "{}")); }
       catch { reject(Object.assign(new Error("Request body must be valid JSON"), { status: 400 })); }
     });
