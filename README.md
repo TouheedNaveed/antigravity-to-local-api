@@ -264,6 +264,10 @@ See [SECURITY.md](SECURITY.md) to report a vulnerability.
 
 Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, tests, and the branch workflow.
 
+## Author
+
+Built and maintained by [Touheed Naveed](https://github.com/TouheedNaveed): the dashboard, API keys, usage and quota views, tool calling, token saving, concurrency, and reliability work.
+
 ## License
 
 A license has not been chosen yet. Please do not assume you have rights beyond viewing and experimenting until a license is added. The upstream project also ships without a license file.
