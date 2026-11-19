@@ -1,6 +1,7 @@
 // Dashboard + admin API. Admin password: scrypt hash in data/admin.json. Sessions: random id in an
 // HttpOnly SameSite=Strict cookie. State-changing calls need the per-session CSRF token header, the
 // X-Requested-With header and a same-origin Origin. Host header must be a loopback name (DNS rebinding).
+import { RANGES } from "./metrics.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -119,8 +120,16 @@ export function createAdmin({ dataDir, keyStore, port, host, extraHosts = [], ge
     res.end(html);
   }
 
+  const ICONS = { "/favicon.svg": ["image/svg+xml", "favicon.svg"], "/favicon.png": ["image/png", "favicon.png"], "/favicon.ico": ["image/png", "favicon.png"], "/apple-touch-icon.png": ["image/png", "favicon.png"] };
+  const recentIds = new Map(), recentNames = new Map();
+
   /** Returns true if the request was handled. */
   async function handle(req, res, url) {
+    if (req.method === "GET" && ICONS[url.pathname]) {
+      if (!hostOk(req)) { send(res, 403, { error: { message: "Forbidden host", type: "authentication_error", code: "bad_host" } }); return true; }
+      try { const [type, file] = ICONS[url.pathname]; const buf = fs.readFileSync(new URL("./assets/" + file, import.meta.url)); res.writeHead(200, { "content-type": type, "cache-control": "public, max-age=86400", "x-content-type-options": "nosniff" }); res.end(buf); } catch { res.writeHead(404); res.end(); }
+      return true;
+    }
     const isPage = req.method === "GET" && (url.pathname === "/" || url.pathname === "/dashboard" || url.pathname === "/dashboard/");
     const isAdminApi = url.pathname.startsWith("/admin/api/");
     if (!isPage && !isAdminApi) return false;
@@ -183,8 +192,17 @@ export function createAdmin({ dataDir, keyStore, port, host, extraHosts = [], ge
       if (method === "GET" && route === "keys") return send(res, 200, { keys: keyStore.list() }), true;
       if (method === "POST" && route === "keys") {
         const body = await readBody(req);
+        // Idempotency: a repeated request id replays the first answer; the same name within 5 s is rejected.
+        const now = Date.now(), rid = String(body.request_id || "").slice(0, 64), nameKey = String(body.name || "").trim().toLowerCase();
+        for (const [k, v] of recentIds) if (now - v.at > 30_000) recentIds.delete(k);
+        for (const [k, t] of recentNames) if (now - t > 5_000) recentNames.delete(k);
+        if (rid && recentIds.has(rid)) return send(res, 201, recentIds.get(rid).payload), true;
+        if (nameKey && recentNames.has(nameKey)) { fail(res, 409, "A key with this name was just created", "duplicate_key"); return true; }
         const { key, record } = keyStore.create({ name: body.name, expiresAt: parseExpiry(body) });
-        return send(res, 201, { key, record, notice: "Copy this key now. It cannot be shown again." }), true;
+        const payload = { key, record, notice: "Copy this key now. It cannot be shown again." };
+        if (rid) recentIds.set(rid, { at: now, payload });
+        if (nameKey) recentNames.set(nameKey, now);
+        return send(res, 201, payload), true;
       }
       let m = route.match(/^keys\/([\w-]+)\/revoke$/);
       if (method === "POST" && m) return send(res, 200, { record: keyStore.revoke(m[1]) }), true;
@@ -192,7 +210,12 @@ export function createAdmin({ dataDir, keyStore, port, host, extraHosts = [], ge
       if (method === "DELETE" && m) { keyStore.delete(m[1]); return send(res, 200, { ok: true }), true; }
       if (method === "GET" && route === "status") return send(res, 200, getStatus()), true;
       if (method === "GET" && route === "models") return send(res, 200, getModels()), true;
-      if (method === "GET" && route === "metrics") return send(res, 200, metrics.query(url.searchParams.get("range") || "24h", { keyName })), true;
+      if (method === "GET" && route === "metrics") {
+        const range = url.searchParams.get("range") || "24h";
+        // prev=1: the equally long period just before this one (used for the dashboard's trend arrows)
+        const now = url.searchParams.get("prev") === "1" && RANGES[range] ? Math.floor(Date.now() / 1000) - RANGES[range].seconds : undefined;
+        return send(res, 200, metrics.query(range, now ? { keyName, now } : { keyName })), true;
+      }
       if (method === "GET" && route === "live") { openLive(req, res); return true; }
       if (method === "GET" && route === "quota") { quota.maybeRefresh(); return send(res, 200, quota.status()), true; }
       if (method === "POST" && route === "quota/refresh") {

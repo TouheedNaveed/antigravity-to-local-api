@@ -78,12 +78,12 @@ Requests to POST /v1/chat/completions automatically archive the latest user mess
 
 ## Memory HTTP endpoints
 
-- GET /v1/memory/stats — index and archive counts.
-- GET /v1/memory/dates — dates containing archived messages.
-- POST /v1/memory/search — global full-text search; body supports query, queries, after, before, role, search_type, and limit.
-- POST /v1/memory/grep — literal substring search.
-- POST /v1/memory/read — read a matching message plus nearby messages using message_id.
-- POST /v1/memory/ingest — import a conversation using conversation_id and messages.
+- GET /v1/memory/stats: index and archive counts.
+- GET /v1/memory/dates: dates containing archived messages.
+- POST /v1/memory/search: global full-text search; body supports query, queries, after, before, role, search_type, and limit.
+- POST /v1/memory/grep: literal substring search.
+- POST /v1/memory/read: read a matching message plus nearby messages using message_id.
+- POST /v1/memory/ingest: import a conversation using conversation_id and messages.
 
 If AGY_API_KEY is set, include Authorization: Bearer YOUR_KEY on these endpoints. The default listener is loopback-only.
 
@@ -99,12 +99,12 @@ curl -s http://127.0.0.1:8788/v1/memory/search \
 
 The MCP server exposes these local tools:
 
-- memory_search — keyword/FTS search; the tool description instructs AGY to infer search terms instead of searching the user's question verbatim.
-- memory_grep — exact substring search.
-- memory_read — retrieve a matching message and nearby context.
-- memory_list_dates — list indexed dates.
-- memory_stats — inspect index counts and paths.
-- memory_ingest — explicitly import supplied conversation records.
+- memory_search: keyword/FTS search; the tool description instructs AGY to infer search terms instead of searching the user's question verbatim.
+- memory_grep: exact substring search.
+- memory_read: retrieve a matching message and nearby context.
+- memory_list_dates: list indexed dates.
+- memory_stats: inspect index counts and paths.
+- memory_ingest: explicitly import supplied conversation records.
 
 Register it once with the AGY CLI:
 
@@ -233,3 +233,12 @@ The dashboard has a **Usage & quota** tab (and a live uptime clock on **Status**
 - **Self-set token budget** (optional): a token budget per day / 5 h / week with a reset time of day, counted from this bridge's own traffic and clearly labelled as self-set. Saved in `data/settings.json`.
 
 Limitations: `/usage` takes a few seconds and needs the desktop keyring session (same as `agy` itself); if it fails, the last error is shown instead of made-up numbers. Metrics only cover requests that went through this bridge.
+
+## Dashboard redesign and OpenCode (v2.3)
+
+- Every screen uses one liquid glass theme (blurred amber background, frosted panels, themed dropdowns, date picker, toggles, modals and toasts). No external fonts, scripts or libraries. Responsive down to 390 px with a bottom nav on phones; the Playground options open as a sheet.
+- Everything is live: SSE status pill, a 1 s ticker for clocks and countdowns, relative times, animated numbers.
+- Playground: Stop aborts a running reply, Send returns when idle.
+- Key creation is idempotent: the dashboard sends a `request_id` (replayed for 30 s) and the server rejects the same key name twice within 5 s, so a double click cannot create two keys.
+- The favicon is served at `/favicon.svg` and `/favicon.png`.
+- The **Docs** tab shows OpenCode setup steps and a ready `opencode.json` listing this bridge's models. Set `AGY_API_KEY` to a key created in the dashboard, then run `opencode` and pick `AGY Local`.
