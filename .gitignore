@@ -16,3 +16,6 @@ memory/raw/
 # Bridge-scoped AGY home and scratch dir (conversation logs)
 .agy-home/
 .orig/
+
+# Local API keys and admin password hash (never commit)
+data/

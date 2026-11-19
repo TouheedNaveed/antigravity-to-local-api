@@ -7,6 +7,8 @@ import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { archiveTurn, ingestConversation, searchMemory, grepMemory, readMemory, listMemoryDates, memoryStats, conversationHistory } from "./memory-store.mjs";
 import { AgyPool, Limiter, classifyError, setupIsolatedHome, pruneIsolatedHome } from "./agy-pool.mjs";
+import { KeyStore } from "./keys.mjs";
+import { createAdmin } from "./admin.mjs";
 import { normalizeTools, buildPrompt, contentToText, parseModelOutput, formatRetryPrompt, cleanJsonObject, badRequest } from "./tools.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -17,6 +19,10 @@ const HOST = process.env.HOST || "127.0.0.1";
 const PORT = Number(process.env.PORT || 8788);
 const API_KEY = process.env.AGY_API_KEY || "";
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
+const DATA_DIR = process.env.AGY_DATA_DIR || path.join(path.dirname(fileURLToPath(import.meta.url)), "data");
+// Default: a key is required for every /v1/* call. AGY_REQUIRE_KEY=0 only opens the API while no keys exist and no AGY_API_KEY is set.
+const REQUIRE_KEY = !["0", "off", "false", "no"].includes((process.env.AGY_REQUIRE_KEY ?? "1").trim().toLowerCase());
+const keyStore = new KeyStore(DATA_DIR);
 
 const CFG = {
   agyBin: process.env.AGY_BIN || path.join(os.homedir(), ".local", "bin", "agy"),
@@ -64,7 +70,7 @@ function json(res, status, data, extraHeaders = {}) {
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
     "access-control-allow-origin": "*",
-    "access-control-allow-headers": "authorization, content-type",
+    "access-control-allow-headers": "authorization, content-type, x-api-key",
     "access-control-allow-methods": "GET, POST, OPTIONS",
     ...extraHeaders
   });
@@ -75,13 +81,36 @@ function openAIError(message, type = "invalid_request_error", code = null, param
   return { error: { message, type, param, code } };
 }
 
-function authorized(req) {
-  if (!API_KEY) return true;
-  const header = req.headers.authorization || "";
-  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
-  const a = Buffer.from(token);
-  const b = Buffer.from(API_KEY);
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
+function presentedToken(req) {
+  const header = String(req.headers.authorization || "");
+  const bearer = /^Bearer\s+(.+)$/i.exec(header);
+  return (bearer ? bearer[1] : String(req.headers["x-api-key"] || "")).trim();
+}
+
+function authError(status, code, message) {
+  return { ok: false, status, body: openAIError(message, "authentication_error", code), headers: { "www-authenticate": 'Bearer realm="agy-local-api"' } };
+}
+
+/** Returns {ok:true, key} (key is null for the legacy env key / open mode) or {ok:false, status, body, headers}. */
+function authenticate(req) {
+  const token = presentedToken(req);
+  const legacyOnly = Boolean(API_KEY);
+  if (token && API_KEY) {
+    const a = Buffer.from(token), b = Buffer.from(API_KEY);
+    if (a.length === b.length && crypto.timingSafeEqual(a, b)) return { ok: true, key: null };
+  }
+  const enforced = REQUIRE_KEY || keyStore.count() > 0 || legacyOnly;
+  if (!enforced) return { ok: true, key: null };
+  if (!token) {
+    if (keyStore.count() === 0 && !legacyOnly) return authError(401, "no_api_keys", "No API keys exist yet. Open the dashboard at http://" + HOST + ":" + PORT + "/ to create one, then send it as 'Authorization: Bearer agy-...'.");
+    return authError(401, "missing_api_key", "Missing API key. Send it as 'Authorization: Bearer agy-...' (or the 'x-api-key' header). Create one in the dashboard at http://" + HOST + ":" + PORT + "/.");
+  }
+  const v = keyStore.verify(token);
+  if (v.error === "expired") return authError(401, "api_key_expired", `This API key expired on ${v.record.expires_at}. Create a new key in the dashboard.`);
+  if (v.error === "revoked") return authError(401, "api_key_revoked", "This API key has been revoked. Create a new key in the dashboard.");
+  if (v.error) return authError(401, "invalid_api_key", "Incorrect API key provided. Check the key or create a new one in the dashboard.");
+  keyStore.touch(v.record);
+  return { ok: true, key: v.record };
 }
 
 function readBody(req) {
@@ -132,7 +161,7 @@ function errorToResponse(err) {
   return { status: 502, body: openAIError(message.slice(-1500), "server_error", "agy_cli_error") };
 }
 
-async function handleChat(req, res, body) {
+async function handleChat(req, res, body, auth = null) {
   const model = String(body.model || MODELS[0].id);
   if (!MODELS.some(m => m.id === model)) return json(res, 400, openAIError(`Unknown model '${model}'. Check GET /v1/models for supported IDs.`, "invalid_request_error", "model_not_found", "model"));
   if (!Array.isArray(body.messages) || body.messages.length === 0) return json(res, 400, openAIError("'messages' must be a non-empty array", "invalid_request_error", null, "messages"));
@@ -309,6 +338,7 @@ async function handleChat(req, res, body) {
     return json(res, r.status, r.body, r.headers);
   } finally {
     res.off("close", onClose);
+    if (auth?.key && (usageTotal.input || usageTotal.output)) keyStore.addTokens(auth.key, usageTotal.input, usageTotal.output);
     release();
   }
 }
@@ -317,7 +347,7 @@ function health() {
   const cliExists = fs.existsSync(CFG.agyBin);
   const status = shuttingDown ? "shutting_down" : (!cliExists || stats.consecutiveFailures >= 3) ? "degraded" : "ok";
   return {
-    ok: status === "ok", status, service: "agy-local-api", version: "2.0.0", uptime_seconds: Math.round((Date.now() - stats.started) / 1000),
+    ok: status === "ok", status, service: "agy-local-api", version: "2.1.0", uptime_seconds: Math.round((Date.now() - stats.started) / 1000),
     cli: CFG.agyBin, cli_found: cliExists,
     mode: { isolated_home: CFG.isolate, memory_tools: CFG.memoryTools, tool_calling: "prompt-emulated", prewarm: CFG.prewarm },
     active: limiter.active, queued: limiter.queue.length, max_concurrent: MAX_CONCURRENT, max_queue: MAX_QUEUE,
@@ -328,17 +358,28 @@ function health() {
   };
 }
 
+const modelsList = () => ({ object: "list", data: MODELS.map(m => ({ id: m.id, object: "model", created: 0, owned_by: "agy-cli", name: m.name })) });
+
+const admin = createAdmin({
+  dataDir: DATA_DIR, keyStore, port: PORT, host: HOST,
+  extraHosts: (process.env.AGY_ADMIN_ALLOWED_HOSTS || "").split(",").map(x => x.trim()).filter(Boolean),
+  getStatus: () => ({ health: health(), models: modelsList().data, auth: { require_key: REQUIRE_KEY, key_count: keyStore.count(), legacy_env_key: Boolean(API_KEY), base_url: `http://${HOST === "0.0.0.0" ? "127.0.0.1" : HOST}:${PORT}/v1` } }),
+  getModels: modelsList, readBody, handleChat
+});
+
 const server = http.createServer(async (req, res) => {
   try {
     if (req.method === "OPTIONS") {
-      res.writeHead(204, { "access-control-allow-origin": "*", "access-control-allow-headers": "authorization, content-type", "access-control-allow-methods": "GET, POST, OPTIONS" });
+      res.writeHead(204, { "access-control-allow-origin": "*", "access-control-allow-headers": "authorization, content-type, x-api-key", "access-control-allow-methods": "GET, POST, OPTIONS" });
       return res.end();
     }
     const url = new URL(req.url, `http://${HOST}:${PORT}`);
     if (req.method === "GET" && url.pathname === "/health") { const h = health(); return json(res, shuttingDown ? 503 : 200, h); }
+    if (await admin.handle(req, res, url)) return;
     if (shuttingDown) return json(res, 503, openAIError("Server is shutting down", "server_error", "shutting_down"), { "retry-after": "5" });
     if (url.pathname.startsWith("/v1/memory/")) {
-      if (!authorized(req)) return json(res, 401, openAIError("Invalid or missing API key", "authentication_error"));
+      const auth = authenticate(req);
+      if (!auth.ok) return json(res, auth.status, auth.body, auth.headers);
       if (req.method === "GET" && url.pathname === "/v1/memory/stats") return json(res, 200, memoryStats());
       if (req.method === "GET" && url.pathname === "/v1/memory/dates") return json(res, 200, listMemoryDates({ limit: Number(url.searchParams.get("limit") || 60) }));
       if (req.method !== "POST") return json(res, 405, openAIError("Use POST for memory search/read/ingest endpoints"));
@@ -353,18 +394,20 @@ const server = http.createServer(async (req, res) => {
       } catch (err) { return json(res, 400, openAIError(err.message)); }
     }
     if (req.method === "GET" && url.pathname === "/v1/models") {
-      if (!authorized(req)) return json(res, 401, openAIError("Invalid or missing API key", "authentication_error"));
-      return json(res, 200, { object: "list", data: MODELS.map(m => ({ id: m.id, object: "model", created: 0, owned_by: "agy-cli", name: m.name })) });
+      const auth = authenticate(req);
+      if (!auth.ok) return json(res, auth.status, auth.body, auth.headers);
+      return json(res, 200, modelsList());
     }
     if (req.method !== "POST" || url.pathname !== "/v1/chat/completions") {
       return json(res, 404, openAIError("Not found. Use GET /v1/models or POST /v1/chat/completions", "invalid_request_error", "not_found"));
     }
-    if (!authorized(req)) return json(res, 401, openAIError("Invalid or missing API key", "authentication_error"));
+    const auth = authenticate(req);
+    if (!auth.ok) return json(res, auth.status, auth.body, auth.headers);
     let body;
     try { body = await readBody(req); }
     catch (err) { return json(res, err.status || 400, openAIError(err.message)); }
     stats.requests++;
-    return await handleChat(req, res, body);
+    return await handleChat(req, res, body, auth);
   } catch (err) {
     logErr("Unhandled request error:", err?.stack || err);
     try { if (!res.headersSent) json(res, 500, openAIError("Internal server error", "server_error", "internal_error")); else res.end(); } catch { /* socket gone */ }
@@ -374,7 +417,8 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, HOST, () => {
   log(`AGY OpenAI-compatible API listening at http://${HOST}:${PORT}`);
   log(`Using CLI: ${CFG.agyBin}`);
-  log(`Auth: ${API_KEY ? "API key required" : "disabled (localhost only)"}`);
+  log(`API keys: ${REQUIRE_KEY || keyStore.count() || API_KEY ? "required for /v1/*" : "not enforced (AGY_REQUIRE_KEY=0 and no keys)"}; ${keyStore.count()} key(s) stored${API_KEY ? " + legacy AGY_API_KEY" : ""}`);
+  log(`Dashboard: http://127.0.0.1:${PORT}/ (admin password ${admin.hasAdmin() ? "set" : "NOT set yet: open the dashboard to create it"})`);
   log(`Isolated AGY home: ${CFG.isolate ? CFG.agyHome : "off (using your global AGY config)"}; memory tools: ${CFG.memoryTools ? "on" : "off"}; concurrency ${MAX_CONCURRENT}, queue ${MAX_QUEUE}, session workers ${CFG.maxSessionWorkers}, prewarm ${CFG.prewarm}`);
 });
 server.on("error", err => { logErr("Server failed:", err.message); process.exit(1); });
@@ -387,9 +431,11 @@ async function shutdown(signal) {
   const deadline = Date.now() + SHUTDOWN_GRACE_MS;
   while ((limiter.active > 0 || limiter.queue.length > 0) && Date.now() < deadline) await new Promise(r => setTimeout(r, 200));
   pool.shutdown();
+  try { keyStore.flush(); } catch (e) { logErr("keys flush failed:", e.message); }
   log("Shutdown complete");
   process.exit(0);
 }
 for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(sig, () => shutdown(sig));
+process.on("exit", () => { try { keyStore.flush(); } catch { /* ignore */ } });
 process.on("unhandledRejection", err => logErr("Unhandled rejection:", err?.stack || err));
 process.on("uncaughtException", err => { logErr("Uncaught exception:", err?.stack || err); });

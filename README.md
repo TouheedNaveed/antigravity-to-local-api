@@ -182,3 +182,41 @@ New / changed environment variables (all in `.env`; see `.env.example`):
 Limitations: tool calling relies on the model following the prompt protocol (it worked on all six models in testing, but it is not a native API feature); images are not supported; `n > 1` is rejected; arguments are validated with a small built-in JSON Schema checker (type, enum, required, nested properties/items, min/max); standby processes use RAM while idle; token counts come from AGY and include the bridge's small prompt scaffolding (~100-350 tokens).
 
 Run `npm run check` (syntax checks + unit tests for the tool-call parser). The original files are in `.orig/`, and the untouched code is on the `main` branch.
+
+## API keys and dashboard (v2.1)
+
+**First run**
+
+1. Start the server (`npm start`) and open `http://127.0.0.1:8790/` (or `/dashboard`).
+2. The first visit shows a setup screen: choose an admin password (min 8 characters). Do this right away: whoever opens the page first sets it.
+3. Open the **API keys** tab, name a key, choose when it expires (after N days, on a date/time, or never) and create it. The full key (`agy-` + 43 characters) is shown **once**; copy it.
+4. Send it with every request: `Authorization: Bearer agy-...` (or the `x-api-key` header).
+
+```bash
+curl http://127.0.0.1:8790/v1/chat/completions \
+  -H "Authorization: Bearer agy-YOUR_KEY" -H "Content-Type: application/json" \
+  -d '{"model":"gemini-3.8-flash-medium","messages":[{"role":"user","content":"Hello"}]}'
+```
+
+**Behaviour**
+
+- **A key is required by default** for every `/v1/*` call (chat, models, memory). Until you create the first key every call returns 401 `no_api_keys`. Existing clients that used a dummy key such as `local` must be given a real key. `AGY_REQUIRE_KEY=0` leaves the API open only while no keys exist and `AGY_API_KEY` is empty; as soon as a key exists, keys are enforced.
+- `AGY_API_KEY` in `.env` still works as a static key (it cannot be revoked from the dashboard; remove it from `.env` to disable it).
+- 401 errors are OpenAI-style with distinct codes: `missing_api_key`, `invalid_api_key`, `api_key_expired`, `api_key_revoked`, `no_api_keys`.
+- Revoking or deleting a key takes effect on the very next request. Revoked keys can be deleted.
+- Per key the dashboard shows status, last used, request count and prompt/completion tokens (tokens consumed by the retry turns are included).
+- `GET /health` stays public (it contains no secrets); everything else under `/v1` needs a key.
+
+**Dashboard tabs**: *API keys* (create, revoke, delete), *Playground* (model picker, streaming chat, optional token usage; authenticate with the dashboard session, which is not counted, or paste a key), *Status* (health, queue, pool, counters, last error, models), *Connect & docs* (base URL, curl, JS/Python SDK snippets, Continue / Open WebUI / Cursor notes). The page is one self-contained file (`dashboard.html`), no CDN or build step.
+
+**Security model**
+
+- Keys: only a SHA-256 hash, a display prefix and metadata are stored, in `data/keys.json` (directory mode 700, file mode 600, gitignored).
+- Admin password: scrypt hash in `data/admin.json` (mode 600). Login gives an HttpOnly, SameSite=Strict session cookie (12 h); 5 wrong passwords per minute are throttled.
+- Admin API (`/admin/api/*`) never accepts API keys. State-changing calls require the session, a per-session CSRF token header, the `X-Requested-With: agy-dashboard` header and a same-origin `Origin`. The `Host` header must be `127.0.0.1`, `localhost` or `[::1]` (blocks DNS rebinding); add names via `AGY_ADMIN_ALLOWED_HOSTS`.
+- The page is served with a nonce-based Content-Security-Policy and `X-Frame-Options: DENY`.
+- To reset a forgotten admin password: stop the server, delete `data/admin.json`, start it, and set a new one. Keys are kept.
+
+New variables: `AGY_REQUIRE_KEY` (default 1), `AGY_DATA_DIR` (default `./data`), `AGY_ADMIN_ALLOWED_HOSTS`.
+
+Limitations: the dashboard speaks plain HTTP on loopback (no TLS); there is a single admin account; sessions live in memory (a restart signs you out); usage counters are written to disk every ~2 s and on shutdown, so a hard kill can lose the last couple of seconds; Cursor's custom base URL setting calls the API from Cursor's servers, so a localhost URL generally does not work there.
