@@ -1,0 +1,47 @@
+name: Bug report
+description: Something is not working as expected
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for the report. Do not include API keys, passwords, `.env` values, or personal file paths.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you expected, and what you saw instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: A short list of steps. Use placeholders such as agy-YOUR_KEY.
+      placeholder: |
+        1. Start the server with npm start
+        2. Call POST /v1/chat/completions
+        3. See the error
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Git tag or commit, or the version shown on /health.
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      description: OS, Node.js version, and agy version if you know it (for example, "Ubuntu 24.04, Node 24, agy 1.5.x").
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or error text
+      description: Paste relevant log lines. Redact keys, cookies, and home paths.
+    validations:
+      required: false
