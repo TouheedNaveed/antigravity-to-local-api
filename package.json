@@ -12,5 +12,10 @@
   },
   "engines": {
     "node": ">=22.5.0"
+  },
+  "author": "Touheed Naveed (https://github.com/TouheedNaveed)",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TouheedNaveed/antigravity-to-local-api.git"
   }
 }

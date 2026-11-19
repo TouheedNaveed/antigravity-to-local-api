@@ -266,7 +266,7 @@ Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for
 
 ## Author
 
-Built and maintained by [Touheed Naveed](https://github.com/TouheedNaveed): the dashboard, API keys, usage and quota views, tool calling, token saving, concurrency, and reliability work.
+Created and maintained by [Touheed Naveed](https://github.com/TouheedNaveed).
 
 ## License
 
