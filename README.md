@@ -174,6 +174,9 @@ New / changed environment variables (all in `.env`; see `.env.example`):
 | `AGY_PREWARM` | 1 | Ready-to-use standby AGY processes per model (0 disables) |
 | `AGY_PREWARM_MAX` | 2 | Total standby processes (each idle one uses ~240 MB RAM) |
 | `AGY_STANDBY_IDLE_MS` | 120000 | Idle standby processes are closed after this |
+| `AGY_MINIMAL_AGENT` | 1 | bridge agent uses `excludeDefaultComponents`: no built-in AGY prompt or tools (about 450 prompt tokens instead of 2,050 for "Say OK"); ignored when `AGY_MEMORY_TOOLS=on` |
+| `AGY_COMPACT_PROMPT` | 1 | shorter wrapper, function-calling and JSON-mode text |
+| `AGY_MAX_HISTORY_TOKENS` / `AGY_MAX_HISTORY_MESSAGES` | 0 | optional cap: oldest turns are dropped first (estimate, about 3.5 characters per token); system messages and the last message are always kept |
 | `AGY_ISOLATE` | 1 | `1` = bridge-only HOME + minimal agent; `0` = legacy (global config, ~12k tokens) |
 | `AGY_HOME_DIR` | `./.agy-home` | Where the isolated AGY home lives |
 | `AGY_HOME_RETAIN_HOURS` | 12 | AGY conversation logs older than this are pruned from the isolated home |
@@ -242,3 +245,17 @@ Limitations: `/usage` takes a few seconds and needs the desktop keyring session 
 - Key creation is idempotent: the dashboard sends a `request_id` (replayed for 30 s) and the server rejects the same key name twice within 5 s, so a double click cannot create two keys.
 - The favicon is served at `/favicon.svg` and `/favicon.png`.
 - The **Docs** tab shows OpenCode setup steps and a ready `opencode.json` listing this bridge's models. Set `AGY_API_KEY` to a key created in the dashboard, then run `opencode` and pick `AGY Local`.
+
+## Token usage (v2.3)
+
+Measured on `gemini-3.8-flash-low`, prompt tokens as reported by AGY:
+
+| Request | Before | After |
+| --- | --- | --- |
+| "Say OK" | 2,040 | 441 |
+| get_weather call, then the tool result | 2,313 and 2,417 | 601 and 712 |
+| JSON mode | 2,085 | 472 |
+| 6 turn chat (client resends history), total | 12,722 | 3,112 |
+| Claude Sonnet 4.6, "Say OK" | 2,705 | 992 |
+
+The saving comes from the agent flag `excludeDefaultComponents: true`, which removes AGY's own system prompt and built-in tools. What is left is the bridge's one sentence agent prompt, your messages, and a short fixed overhead (about 370 tokens on Gemini, about 920 on Claude, set by AGY). AGY reports `cache_read_tokens` as 0, so warm sessions do not reduce usage: every turn is billed for the whole conversation, which is why `AGY_MAX_HISTORY_*` exists. Completion tokens include thinking tokens, which the model sometimes adds (0 to about 120) and the bridge cannot control.

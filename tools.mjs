@@ -87,17 +87,40 @@ function renderAssistantToolCalls(m) {
 }
 
 /** Render OpenAI messages into the plain-text transcript sent to AGY. */
-export function renderTranscript(messages, priorHistory = []) {
+/** Rough token estimate (about 3.5 characters per token) used only for the optional history cap. */
+export function estimateTokens(m) {
+  let n = contentToText(m?.content).length;
+  for (const c of m?.tool_calls || []) n += String(c?.function?.name || "").length + String(c?.function?.arguments ?? "").length;
+  return Math.ceil((n + 12) / 3.5);
+}
+
+/** Keep the newest turns that fit the limits. The latest message is always kept; a leading orphan tool result is dropped. */
+export function trimConversation(convo, { maxTokens = 0, maxMessages = 0 } = {}) {
+  if (!(maxTokens > 0) && !(maxMessages > 0)) return { convo, dropped: 0 };
+  let start = convo.length - 1, tokens = estimateTokens(convo[start]);
+  while (start > 0) {
+    const next = estimateTokens(convo[start - 1]);
+    if (maxTokens > 0 && tokens + next > maxTokens) break;
+    if (maxMessages > 0 && convo.length - start >= maxMessages) break;
+    tokens += next; start--;
+  }
+  while (start < convo.length - 1 && ["tool", "function"].includes(String(convo[start]?.role).toLowerCase())) start++;
+  return { convo: convo.slice(start), dropped: start };
+}
+
+export function renderTranscript(messages, priorHistory = [], limits = {}) {
   if (!Array.isArray(messages) || messages.length === 0) throw badRequest("'messages' must be a non-empty array", "messages");
   const isInstr = m => ["system", "developer"].includes(String(m?.role || "").toLowerCase());
   const instructions = messages.filter(isInstr);
-  const convo = [...priorHistory, ...messages.filter(m => !isInstr(m))];
+  const all = [...priorHistory, ...messages.filter(m => !isInstr(m))];
+  const { convo, dropped } = trimConversation(all, limits);
   const callNames = new Map();
   for (const m of convo) {
     for (const c of m?.tool_calls || []) if (c?.id) callNames.set(c.id, c.function?.name);
   }
   const parts = [];
   for (const m of instructions) parts.push(`[SYSTEM]\n${contentToText(m.content)}`);
+  if (dropped) parts.push("[EARLIER MESSAGES OMITTED]");
   for (const m of convo) {
     const role = String(m?.role || "user").toLowerCase();
     if (role === "tool" || role === "function") {
@@ -116,7 +139,17 @@ export function renderTranscript(messages, priorHistory = []) {
   return parts.join("\n\n");
 }
 
-export function buildToolsSection({ defs, choice, parallel }) {
+export function buildToolsSection({ defs, choice, parallel }, { compact = false } = {}) {
+  if (compact) {
+    const L = ["[FUNCTIONS]", "The client runs these functions; you have no other tools. Results come back as [TOOL RESULT] messages."];
+    defs.forEach((d, i) => L.push(`${i + 1}. ${d.name}${d.description ? " - " + d.description : ""}\n   parameters: ${jsonCompact(d.parameters)}`));
+    L.push("To call, reply with ONLY: <tool_calls>[{\"name\":\"<function>\",\"arguments\":{...}}]</tool_calls>");
+    L.push("Arguments must match the schema. Use only the listed names. Never invent missing required values: ask in plain text instead. " + (parallel ? "Several independent calls may share the array." : "One call per reply."));
+    if (choice.mode === "required") L.push("You MUST call a function now.");
+    else if (choice.mode === "function") L.push(`You MUST call "${choice.name}" now (and no other function).`);
+    else L.push("Call only when needed. If a [TOOL RESULT] already answers it, reply in plain text with no <tool_calls>.");
+    return L.join("\n");
+  }
   const lines = [];
   lines.push("[FUNCTION CALLING]");
   lines.push("The client application offers the functions below. The CLIENT executes them and sends the output back as [TOOL RESULT] messages. You cannot run anything yourself and you have no other tools, so never claim to have executed something.");
@@ -138,19 +171,19 @@ export function buildToolsSection({ defs, choice, parallel }) {
   return lines.join("\n");
 }
 
-export function buildPrompt({ messages, tools, responseFormat, priorHistory = [], memoryPolicy = "" }) {
-  const transcript = renderTranscript(messages, priorHistory);
+export function buildPrompt({ messages, tools, responseFormat, priorHistory = [], memoryPolicy = "", compact = false, maxHistoryTokens = 0, maxHistoryMessages = 0 }) {
+  const transcript = renderTranscript(messages, priorHistory, { maxTokens: maxHistoryTokens, maxMessages: maxHistoryMessages });
   const sections = [];
-  if (tools && tools.defs.length && tools.choice.mode !== "none") sections.push(buildToolsSection(tools));
+  if (tools && tools.defs.length && tools.choice.mode !== "none") sections.push(buildToolsSection(tools, { compact }));
   const rf = responseFormat?.type;
   if (rf === "json_object" || rf === "json_schema") {
-    let line = "[OUTPUT FORMAT]\nYour final answer must be ONE valid JSON object and nothing else: no markdown fences, no commentary.";
+    let line = compact ? "[OUTPUT FORMAT]\nReply with ONE valid JSON object only: no fences, no commentary." : "[OUTPUT FORMAT]\nYour final answer must be ONE valid JSON object and nothing else: no markdown fences, no commentary.";
     const schema = responseFormat.json_schema?.schema;
     if (rf === "json_schema" && schema) line += ` It must conform to this JSON Schema: ${jsonCompact(schema)}`;
     sections.push(line);
   }
   if (memoryPolicy) sections.push(memoryPolicy);
-  const tail = "[ASSISTANT]\nRespond to the conversation above. Follow the system instructions and answer the latest message.";
+  const tail = compact ? "[ASSISTANT]" : "[ASSISTANT]\nRespond to the conversation above. Follow the system instructions and answer the latest message.";
   return [transcript, ...sections, tail].join("\n\n");
 }
 

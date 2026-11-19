@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { normalizeTools, parseModelOutput, buildPrompt, validateSchema, extractJson, cleanJsonObject } from "./tools.mjs";
+import { normalizeTools, parseModelOutput, buildPrompt, validateSchema, extractJson, cleanJsonObject, trimConversation, buildToolsSection } from "./tools.mjs";
 
 const weather = { type: "function", function: { name: "get_weather", description: "Weather", parameters: { type: "object", properties: { city: { type: "string" }, unit: { type: "string", enum: ["c", "f"] } }, required: ["city"] } } };
 const t = normalizeTools({ tools: [weather] });
@@ -63,4 +63,25 @@ test("schema validation and json helpers", () => {
   assert.deepEqual(extractJson('noise {"a":"}"} tail').value, { a: "}" });
   assert.equal(cleanJsonObject('```json\n{"x":1}\n```'), '{"x":1}');
   assert.equal(cleanJsonObject("[1]"), null);
+});
+
+test("history cap keeps the newest turns, never the orphan tool result, and always the last message", () => {
+  const msgs = Array.from({ length: 10 }, (_, i) => ({ role: i % 2 ? "assistant" : "user", content: "m" + i + " " + "x".repeat(70) }));
+  assert.equal(trimConversation(msgs, {}).dropped, 0);
+  const byCount = trimConversation(msgs, { maxMessages: 4 });
+  assert.equal(byCount.convo.length, 4); assert.equal(byCount.convo.at(-1), msgs.at(-1));
+  const byTokens = trimConversation(msgs, { maxTokens: 50 });
+  assert.ok(byTokens.convo.length >= 1 && byTokens.convo.at(-1) === msgs.at(-1));
+  const withTool = [{ role: "user", content: "a" }, { role: "assistant", content: null, tool_calls: [{ id: "c1", function: { name: "f", arguments: "{}" } }] }, { role: "tool", tool_call_id: "c1", content: "r" }, { role: "user", content: "b" }];
+  assert.deepEqual(trimConversation(withTool, { maxMessages: 2 }).convo.map(m => m.role), ["user"]);
+  const p = buildPrompt({ messages: msgs, maxHistoryMessages: 2 });
+  assert.match(p, /\[EARLIER MESSAGES OMITTED\]/); assert.ok(!p.includes("m0 "));
+});
+
+test("compact prompt keeps the function-calling contract and is shorter", () => {
+  const args = { defs: t.defs, choice: t.choice, parallel: t.parallel };
+  const full = buildToolsSection(args), small = buildToolsSection(args, { compact: true });
+  for (const needle of ["get_weather", "<tool_calls>", "[TOOL RESULT]", "parameters:"]) assert.ok(small.includes(needle), needle);
+  assert.ok(small.length < full.length);
+  assert.match(buildPrompt({ tools: t, compact: true, messages: [{ role: "user", content: "hi" }] }), /\[ASSISTANT\]$/);
 });

@@ -37,6 +37,10 @@ const CFG = {
   agyWork: path.join(process.env.AGY_HOME_DIR || path.join(HERE, ".agy-home"), "work"),
   retainHours: num("AGY_HOME_RETAIN_HOURS", 12, 1),
   memoryTools: flag("AGY_MEMORY_TOOLS", false),
+  minimalAgent: flag("AGY_MINIMAL_AGENT", true),
+  compactPrompt: flag("AGY_COMPACT_PROMPT", true),
+  maxHistoryTokens: num("AGY_MAX_HISTORY_TOKENS", 0),
+  maxHistoryMessages: num("AGY_MAX_HISTORY_MESSAGES", 0),
   memoryMcpPath: path.join(HERE, "memory-mcp.mjs"),
   memoryDir: process.env.AGY_MEMORY_DIR || "",
   prewarm: num("AGY_PREWARM", 1),
@@ -237,7 +241,7 @@ async function handleChat(req, res, body, auth = null) {
         if (useSession && convo.length === 1 && convo[0]?.role === "user") {
           try { priorHistory = conversationHistory(sessionId, 40).messages; } catch (e) { logErr("Session history load failed:", e.message); }
         }
-        prompt = buildPrompt({ messages: body.messages, tools: toolMode ? tools : null, responseFormat: jsonMode ? body.response_format : null, priorHistory, memoryPolicy: CFG.memoryTools && !toolMode ? MEMORY_POLICY : "" });
+        prompt = buildPrompt({ messages: body.messages, tools: toolMode ? tools : null, responseFormat: jsonMode ? body.response_format : null, priorHistory, memoryPolicy: CFG.memoryTools && !toolMode ? MEMORY_POLICY : "", compact: CFG.compactPrompt, maxHistoryTokens: CFG.maxHistoryTokens, maxHistoryMessages: CFG.maxHistoryMessages });
       }
       const turn = async p => {
         const r = await worker.run(p, { onText, signal: ac.signal });

@@ -41,7 +41,7 @@ description: Text-only assistant used by a local API bridge.
 mainAgent: true
 subagent: false
 tools: []
----
+__EXCL__---
 You are a helpful general-purpose assistant answering through an API. You have no tools, no shell, no filesystem and no internet access, so never try to use any. Follow the instructions in each message exactly, including any required output format (for example a <tool_calls> block or a JSON-only reply).
 `;
 
@@ -56,7 +56,10 @@ export function setupIsolatedHome(cfg) {
   const home = cfg.agyHome;
   const gem = path.join(home, ".gemini");
   fs.mkdirSync(cfg.agyWork, { recursive: true });
-  writeIfChanged(path.join(gem, "config", "agents", "bridge", "agent.md"), AGENT_PROMPT);
+  // excludeDefaultComponents drops AGY's built-in system prompt sections and tools (about 1.7k tokens per request).
+  // It is skipped when the memory MCP tools are on, because those need the default tool plumbing.
+  const minimal = cfg.minimalAgent !== false && !cfg.memoryTools;
+  writeIfChanged(path.join(gem, "config", "agents", "bridge", "agent.md"), AGENT_PROMPT.replace("__EXCL__", minimal ? "excludeDefaultComponents: true\n" : ""));
   const mcp = { mcpServers: {} };
   const settings = { permissions: { allow: [], deny: [] } };
   if (cfg.memoryTools) {
