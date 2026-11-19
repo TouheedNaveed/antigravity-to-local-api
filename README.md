@@ -236,7 +236,7 @@ Limitations: `/usage` takes a few seconds and needs the desktop keyring session 
 
 ## Dashboard redesign and OpenCode (v2.3)
 
-- Every screen uses one liquid glass theme (blurred amber background, frosted panels, themed dropdowns, date picker, toggles, modals and toasts). No external fonts, scripts or libraries. Responsive down to 390 px with a bottom nav on phones; the Playground options open as a sheet.
+- Every screen uses one liquid glass theme (blurred amber background, frosted panels, themed dropdowns, date picker, toggles, modals and toasts). No external fonts, scripts or libraries. Responsive down to 390 px with a bottom nav on phones; the Playground Options panel sits inline below the chat (the Options button scrolls to it).
 - Everything is live: SSE status pill, a 1 s ticker for clocks and countdowns, relative times, animated numbers.
 - Playground: Stop aborts a running reply, Send returns when idle.
 - Key creation is idempotent: the dashboard sends a `request_id` (replayed for 30 s) and the server rejects the same key name twice within 5 s, so a double click cannot create two keys.

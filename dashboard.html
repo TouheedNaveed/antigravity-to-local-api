@@ -448,14 +448,11 @@ button.chip:hover{background:rgba(245,144,30,.25);border-color:rgba(255,170,70,.
 }
 @media (max-width:1100px){
   #p-opts{display:inline-flex}
-  .play-side{display:none}
-  .play-side.open{display:block;position:fixed;z-index:70;left:12px;right:12px;bottom:calc(92px + env(safe-area-inset-bottom));max-height:calc(100dvh - 130px);overflow:auto;box-shadow:0 30px 80px -10px rgba(0,0,0,.7)}
-  #p-scrim{position:fixed;inset:0;z-index:65;background:rgba(20,10,3,.55);backdrop-filter:blur(4px);display:none}
-  #p-scrim.on{display:block}
-  #p-side-x{display:grid}
+  #p-opts{display:inline-flex}
+  .play-side.flash{animation:flashp 1.4s ease-out}
 }
 @media (max-width:820px){
-  .app{grid-template-columns:minmax(0,1fr);padding:14px 14px calc(104px + env(safe-area-inset-bottom));gap:14px}
+  .app{grid-template-columns:minmax(0,1fr);padding:calc(18px + env(safe-area-inset-top)) 14px calc(104px + env(safe-area-inset-bottom));gap:14px}
   .rail{position:fixed;left:12px;right:12px;bottom:calc(10px + env(safe-area-inset-bottom));top:auto;width:auto!important;height:68px;padding:6px;flex-direction:row;border-radius:26px;gap:0}
   .rail .top,.rail .collapse,.rail .sp,.rail .bottom{display:none}
   .rail .nav{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));flex:1;margin:0;gap:4px}
@@ -493,6 +490,7 @@ button.chip:hover{background:rgba(245,144,30,.25);border-color:rgba(255,170,70,.
   .seg button{padding:0 14px}
   
 }
+@keyframes flashp{0%,100%{box-shadow:0 0 0 0 rgba(245,144,30,0)}25%{box-shadow:0 0 0 4px rgba(245,144,30,.75),0 0 40px rgba(245,144,30,.45)}}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
 </head>
@@ -666,7 +664,7 @@ button.chip:hover{background:rgba(245,144,30,.25);border-color:rgba(255,170,70,.
               <button class="btn hidden" id="p-stop" aria-label="Stop" data-tip="Stop"><svg class="ic"><use href="#i-stop"/></svg></button>
               <button class="btn pri" id="p-send" aria-label="Send" data-tip="Send"><svg class="ic"><use href="#i-send"/></svg></button></div></div>
         </div>
-        <div id="p-scrim"></div><div class="glass card play-side" id="p-side"><div class="side-h"><h3>Options</h3><button class="btn icon" id="p-side-x" aria-label="Close"><svg class="ic"><use href="#i-x"/></svg></button></div>
+        <div class="glass card play-side" id="p-side"><div class="side-h"><h3>Options</h3></div>
           <div class="side-form">
             <div class="field"><span class="lab">Model</span><div id="p-model-w"></div></div>
             <div class="field"><span class="lab">Authenticate with</span><div id="p-auth-w"></div></div>
@@ -1388,10 +1386,7 @@ setInterval(() => { if (S.tab === "keys" && !document.hidden && S.csrf) loadKeys
 const modelSel = GlassSelect({ label: "Model", options: [], value: null, onChange: () => updateSub() }); $("#p-model-w").append(modelSel.root);
 const authSel = GlassSelect({ label: "Authenticate with", value: "admin", options: [{ value: "admin", label: "Dashboard session", sub: "not counted", keepSub: true }, { value: "key", label: "An API key", sub: "counted", keepSub: true }], onChange: v => authChange(v) }); $("#p-auth-w").append(authSel.root);
 function updateSub() { const m = S.models.find(x => x.id === modelSel.value); setText($("#p-sub"), m ? (m.name || m.id) : ""); }
-const sideTog = on => { $("#p-side").classList.toggle("open", on); $("#p-scrim").classList.toggle("on", on); };
-$("#p-opts").onclick = () => sideTog(!$("#p-side").classList.contains("open"));
-$("#p-side-x").onclick = () => sideTog(false); $("#p-scrim").onclick = () => sideTog(false);
-document.addEventListener("keydown", e => { if (e.key === "Escape" && $("#p-side").classList.contains("open") && !$(".mback") && !$(".sel-menu")) sideTog(false); });
+$("#p-opts").onclick = () => { const s = $("#p-side"); s.scrollIntoView({ behavior: "smooth", block: "start" }); s.classList.remove("flash"); void s.offsetWidth; s.classList.add("flash"); };
 function authChange(v) { $("#p-key-f").classList.toggle("hidden", v !== "key"); }
 async function loadModels() {
   try { const d = await api("GET", "models"); S.models = d.data; modelSel.setOptions(d.data.map(m => ({ value: m.id, label: m.name || m.id, sub: m.id }))); if (!modelSel.value) modelSel.value = d.data[0] && d.data[0].id; updateSub(); fillOpenCode(); } catch {}
