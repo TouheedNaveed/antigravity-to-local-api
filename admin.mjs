@@ -20,12 +20,32 @@ function checkPassword(password, rec) {
   return crypto.timingSafeEqual(got, Buffer.from(rec.hash, "hex"));
 }
 
-export function createAdmin({ dataDir, keyStore, port, host, extraHosts = [], getStatus, getModels, readBody, handleChat }) {
+export function createAdmin({ dataDir, keyStore, port, host, extraHosts = [], getStatus, getModels, readBody, handleChat, metrics, quota, budget, getLive }) {
   const adminFile = path.join(dataDir, "admin.json");
   const sessions = new Map(); // id -> {csrf, expires}
   const fails = []; // login failure timestamps
   const htmlTemplate = () => fs.readFileSync(new URL("./dashboard.html", import.meta.url), "utf8");
   const allowedHosts = new Set(["127.0.0.1", "localhost", "[::1]", ...extraHosts.map(h => h.toLowerCase())]);
+
+  const liveClients = new Set();
+  const SPECIAL = { admin: "Dashboard playground", legacy: "Legacy AGY_API_KEY", open: "Open access (no key)" };
+  const keyName = id => SPECIAL[id] || keyStore.find(id)?.name || `${id} (deleted)`;
+
+  function openLive(req, res) {
+    if (liveClients.size >= 8) return fail(res, 429, "Too many live connections");
+    res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-store", connection: "keep-alive", "x-accel-buffering": "no" });
+    const push = () => {
+      try { quota.maybeRefresh(); res.write(`event: snapshot\ndata: ${JSON.stringify(getLive())}\n\n`); }
+      catch (e) { res.write(`event: error\ndata: ${JSON.stringify({ message: e.message })}\n\n`); }
+    };
+    res.write("retry: 3000\n\n");
+    push();
+    const timer = setInterval(push, 2000);
+    const client = { res, timer };
+    liveClients.add(client);
+    req.on("close", () => { clearInterval(timer); liveClients.delete(client); });
+  }
+  function closeLive() { for (const c of liveClients) { clearInterval(c.timer); try { c.res.end(); } catch { /* gone */ } } liveClients.clear(); }
 
   const loadAdmin = () => { try { return JSON.parse(fs.readFileSync(adminFile, "utf8")); } catch { return null; } };
 
@@ -172,6 +192,16 @@ export function createAdmin({ dataDir, keyStore, port, host, extraHosts = [], ge
       if (method === "DELETE" && m) { keyStore.delete(m[1]); return send(res, 200, { ok: true }), true; }
       if (method === "GET" && route === "status") return send(res, 200, getStatus()), true;
       if (method === "GET" && route === "models") return send(res, 200, getModels()), true;
+      if (method === "GET" && route === "metrics") return send(res, 200, metrics.query(url.searchParams.get("range") || "24h", { keyName })), true;
+      if (method === "GET" && route === "live") { openLive(req, res); return true; }
+      if (method === "GET" && route === "quota") { quota.maybeRefresh(); return send(res, 200, quota.status()), true; }
+      if (method === "POST" && route === "quota/refresh") {
+        if (Date.now() - quota.lastAttempt > 10_000) await quota.refresh(); else if (quota.inflight) await quota.inflight;
+        return send(res, 200, quota.status()), true;
+      }
+      if (method === "GET" && route === "budget") return send(res, 200, { ...budget.status(), config: budget.cfg }), true;
+      if (method === "POST" && route === "budget") { budget.set(await readBody(req)); return send(res, 200, { ...budget.status(), config: budget.cfg }), true; }
+      if (method === "DELETE" && route === "budget") { budget.disable(); return send(res, 200, { ...budget.status(), config: budget.cfg }), true; }
       if (method === "POST" && route === "chat") {
         const body = await readBody(req);
         await handleChat(req, res, body, null);
@@ -185,5 +215,5 @@ export function createAdmin({ dataDir, keyStore, port, host, extraHosts = [], ge
     return true;
   }
 
-  return { handle, hostOk, hasAdmin: () => Boolean(loadAdmin()) };
+  return { handle, hostOk, closeLive, hasAdmin: () => Boolean(loadAdmin()) };
 }

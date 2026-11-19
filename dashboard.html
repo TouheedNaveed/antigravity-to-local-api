@@ -51,6 +51,24 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:
 .mut{color:var(--mut)}
 .copy{float:right}
 .hidden{display:none!important}
+.bar{height:10px;background:var(--bg);border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.bar>i{display:block;height:100%;background:var(--ok)}
+.bar>i.mid{background:var(--warn)}.bar>i.low{background:var(--bad)}
+.qrow{margin:10px 0}.qrow .top{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:4px}
+.qgroup{border:1px solid var(--line);border-radius:8px;padding:12px;margin-bottom:12px;background:var(--panel2)}
+.chartbox{position:relative}
+canvas.ch{width:100%;height:210px;display:block}
+.charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(460px,1fr));gap:18px}
+.legend{display:flex;gap:14px;flex-wrap:wrap;color:var(--mut);font-size:12px;margin-bottom:4px}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+.tip{position:absolute;pointer-events:none;background:#0b0f14;border:1px solid var(--line);border-radius:6px;padding:6px 9px;font-size:12px;white-space:nowrap;z-index:5}
+.seg button{border-radius:0}.seg button:first-child{border-radius:6px 0 0 6px}.seg button:last-child{border-radius:0 6px 6px 0}.seg button.on{background:#1f6feb;border-color:#1f6feb}
+.clock{font-variant-numeric:tabular-nums}
+.hbar{display:flex;height:8px;border-radius:4px;overflow:hidden;background:var(--bg);margin-top:3px;min-width:120px}
+.hbar i{display:block;height:100%}
+.livedot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--mut);margin-right:6px}
+.livedot.on{background:var(--ok);box-shadow:0 0 6px var(--ok)}
+
 </style>
 </head>
 <body>
@@ -79,6 +97,7 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:
   <nav id="tabs">
     <button data-tab="keys" class="on">API keys</button>
     <button data-tab="play">Playground</button>
+    <button data-tab="usage">Usage &amp; quota</button>
     <button data-tab="status">Status</button>
     <button data-tab="connect">Connect &amp; docs</button>
   </nav>
@@ -130,8 +149,52 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:
       </div>
     </section>
 
+    <section id="tab-usage" class="hidden">
+      <div class="card">
+        <h2><span class="livedot" id="u-dot"></span>Live <span class="mut" id="u-livemsg" style="font-weight:400;font-size:12px"></span></h2>
+        <div class="grid" id="u-live"></div>
+      </div>
+
+      <div class="card">
+        <h2>Plan quota <button class="btn copy" id="q-refresh">Refresh now</button></h2>
+        <div id="q-body" class="mut">Loading quota&hellip;</div>
+        <div class="mut" id="q-foot" style="margin-top:8px;font-size:12px"></div>
+      </div>
+
+      <div class="card">
+        <h2>Self-set token budget <span class="mut" style="font-weight:400;font-size:12px">(optional; counted from this bridge's own traffic, not your plan quota)</span></h2>
+        <div id="b-status" class="mut"></div>
+        <div class="row" style="margin-top:10px">
+          <label class="f">Tokens per window<input id="b-tokens" type="number" min="1" value="1000000" style="width:150px"></label>
+          <label class="f">Window<select id="b-period"><option value="day">Per day</option><option value="5h">Per 5 hours</option><option value="week">Per week</option></select></label>
+          <label class="f">Reset time of day<input id="b-time" type="time" value="00:00"></label>
+          <label class="f hidden" id="b-wd-w">Reset weekday<select id="b-wd"><option value="1">Monday</option><option value="2">Tuesday</option><option value="3">Wednesday</option><option value="4">Thursday</option><option value="5">Friday</option><option value="6">Saturday</option><option value="0">Sunday</option></select></label>
+          <button class="btn pri" id="b-save" style="align-self:flex-end">Save budget</button>
+          <button class="btn" id="b-off" style="align-self:flex-end">Turn off</button>
+        </div>
+        <div class="err" id="b-err"></div>
+      </div>
+
+      <div class="row">
+        <div class="seg" id="u-range"><button class="btn" data-r="1h">1 h</button><button class="btn on" data-r="24h">24 h</button><button class="btn" data-r="7d">7 d</button><button class="btn" data-r="30d">30 d</button></div>
+        <span class="mut" id="u-updated"></span>
+      </div>
+      <div class="grid" id="u-totals" style="margin-bottom:18px"></div>
+      <div class="charts">
+        <div class="card"><h2>Tokens over time</h2><div class="legend"><span><i style="background:#58a6ff"></i>prompt</span><span><i style="background:#3fb950"></i>completion</span></div><div class="chartbox"><canvas class="ch" id="ch-tokens"></canvas></div></div>
+        <div class="card"><h2>Requests &amp; errors</h2><div class="legend"><span><i style="background:#58a6ff"></i>requests</span><span><i style="background:#f85149"></i>errors</span><span><i style="background:#d29922"></i>rejected (401)</span></div><div class="chartbox"><canvas class="ch" id="ch-req"></canvas></div></div>
+        <div class="card"><h2>Latency (ms)</h2><div class="legend"><span><i style="background:#58a6ff"></i>average</span><span><i style="background:#8b949e"></i>slowest</span></div><div class="chartbox"><canvas class="ch" id="ch-lat"></canvas></div></div>
+        <div class="card"><h2>Concurrency &amp; queue (peak)</h2><div class="legend"><span><i style="background:#3fb950"></i>active</span><span><i style="background:#d29922"></i>queued</span></div><div class="chartbox"><canvas class="ch" id="ch-conc"></canvas></div></div>
+      </div>
+      <div class="charts">
+        <div class="card"><h2>By model</h2><div style="overflow:auto"><table id="t-model"><thead><tr><th>Model</th><th>Requests</th><th>Errors</th><th>Tokens (in / out)</th><th>Avg latency</th></tr></thead><tbody></tbody></table></div></div>
+        <div class="card"><h2>By key</h2><div style="overflow:auto"><table id="t-key"><thead><tr><th>Key</th><th>Requests</th><th>Errors</th><th>Tokens (in / out)</th><th>Avg latency</th></tr></thead><tbody></tbody></table></div></div>
+      </div>
+      <p class="mut" style="font-size:12px">Metrics are stored in <code>data/metrics.sqlite</code>: per-minute buckets for 48 h, then hourly, kept about 400 days. Times are shown in your browser's time zone.</p>
+    </section>
+
     <section id="tab-status" class="hidden">
-      <div class="card"><h2>Server <button class="btn copy" id="s-refresh">Refresh</button></h2><div class="grid" id="s-grid"></div></div>
+      <div class="card"><h2>Server <span class="mut clock" id="s-clock" style="font-weight:400"></span> <button class="btn copy" id="s-refresh">Refresh</button></h2><div class="grid" id="s-grid"></div></div>
       <div class="card"><h2>Pool &amp; queue</h2><pre id="s-pool"></pre></div>
       <div class="card"><h2>Last error</h2><pre id="s-err"></pre></div>
       <div class="card"><h2>Models</h2><pre id="s-models"></pre></div>
@@ -158,9 +221,9 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:
 <script nonce="__NONCE__">
 "use strict";
 const $ = s => document.querySelector(s);
-let csrf = null, playKey = "", chatHistory = [], abortCtl = null, statusTimer = null;
+let curTab = "keys", live = null, liveStart = 0, es = null, metricsData = null, range = "24h", lastReqCount = -1, csrf = null, playKey = "", chatHistory = [], abortCtl = null, statusTimer = null;
 
-function show(id) { for (const x of ["setup", "login", "app"]) $("#" + x).classList.toggle("hidden", x !== id); }
+function show(id) { if (id !== "app" && typeof stopLive === "function") stopLive(); for (const x of ["setup", "login", "app"]) $("#" + x).classList.toggle("hidden", x !== id); }
 function setText(el, t) { el.textContent = t == null ? "" : String(t); }
 
 async function api(method, path, body) {
@@ -205,7 +268,7 @@ async function boot() {
 async function enterApp() {
   show("app");
   setText($("#hd-base"), location.origin + "/v1");
-  fillConnect(); await Promise.all([loadKeys(), loadModels()]);
+  fillConnect(); startLive(); await Promise.all([loadKeys(), loadModels()]);
 }
 $("#su-go").onclick = async () => {
   setText($("#su-err"), "");
@@ -234,10 +297,12 @@ $("#btn-pw").onclick = async () => {
 $("#tabs").onclick = e => {
   const t = e.target.dataset && e.target.dataset.tab; if (!t) return;
   for (const b of $("#tabs").children) b.classList.toggle("on", b === e.target);
-  for (const s of ["keys", "play", "status", "connect"]) $("#tab-" + s).classList.toggle("hidden", s !== t);
+  for (const s of ["keys", "play", "usage", "status", "connect"]) $("#tab-" + s).classList.toggle("hidden", s !== t);
   clearInterval(statusTimer);
   if (t === "status") { loadStatus(); statusTimer = setInterval(loadStatus, 5000); }
   if (t === "keys") loadKeys();
+  curTab = t;
+  if (t === "usage") { loadMetrics(); loadBudget(); setTimeout(redrawCharts, 50); }
 };
 
 // ---------- keys
@@ -372,6 +437,214 @@ async function loadStatus() {
   } catch (e) { if (e.status !== 401) setText($("#s-err"), e.message); }
 }
 $("#s-refresh").onclick = loadStatus;
+
+
+// ---------- live (SSE) , clocks, quota, budget
+const pad2 = n => String(n).padStart(2, "0");
+function fmtCountdown(sec) {
+  if (sec == null) return "";
+  sec = Math.max(0, Math.floor(sec));
+  const d = Math.floor(sec / 86400), h = Math.floor(sec % 86400 / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60;
+  return (d ? d + "d " : "") + (d || h ? h + "h " : "") + pad2(m) + "m " + pad2(s) + "s";
+}
+function fmtUptime(sec) { const d = Math.floor(sec / 86400), h = Math.floor(sec % 86400 / 3600), m = Math.floor(sec % 3600 / 60), s = Math.floor(sec % 60); return (d ? d + "d " : "") + pad2(h) + ":" + pad2(m) + ":" + pad2(s); }
+function fmtTok(n) { n = Number(n || 0); return n >= 1e6 ? (n / 1e6).toFixed(2) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n); }
+function barClass(frac) { return frac < 0.1 ? "low" : frac < 0.3 ? "mid" : ""; }
+
+function startLive() {
+  if (es) es.close();
+  es = new EventSource("/admin/api/live");
+  es.addEventListener("snapshot", e => { try { applyLive(JSON.parse(e.data)); } catch {} });
+  es.onopen = () => { $("#u-dot").classList.add("on"); setText($("#u-livemsg"), "streaming (updates every 2 s)"); };
+  es.onerror = () => {
+    $("#u-dot").classList.remove("on"); setText($("#u-livemsg"), "reconnecting...");
+    if (es.readyState === 2) { setTimeout(async () => { try { const st = await fetch("/admin/api/state", { credentials: "same-origin" }).then(r => r.json()); if (st.authenticated) startLive(); } catch {} }, 4000); }
+  };
+}
+function stopLive() { if (es) { es.close(); es = null; } }
+
+function applyLive(d) {
+  live = d; liveStart = Date.now() - d.uptime_seconds * 1000;
+  const g = $("#u-live"); 
+  const gauge = (label, val, max) => { const f = max ? Math.min(1, val / max) : 0; const box = el("div", { class: "stat" }, el("b", null, val + " / " + max), el("span", null, label), el("div", { class: "bar", style: "margin-top:6px" }, el("i", { class: f > 0.8 ? "low" : f > 0.5 ? "mid" : "", style: "width:" + Math.max(2, f * 100) + "%" }))); return box; };
+  g.replaceChildren(
+    el("div", { class: "stat" }, el("b", { class: "clock", id: "u-uptime" }, fmtUptime(d.uptime_seconds)), el("span", null, "server uptime (live clock)")),
+    gauge("active requests / max concurrent", d.active, d.max_concurrent), gauge("queued / max queue", d.queued, d.max_queue),
+    statBox("requests, last 5 min", d.last_5min.requests), statBox("errors, last 5 min", d.last_5min.errors),
+    statBox("tokens, last 5 min", fmtTok(d.last_5min.prompt_tokens + d.last_5min.completion_tokens)), statBox("status", d.status));
+  renderQuota(d.quota); renderBudget(d.budget);
+  const total = d.stats.requests;
+  if (lastReqCount !== -1 && total !== lastReqCount && curTab === "usage") loadMetrics();
+  lastReqCount = total;
+  setText($("#s-clock"), "up " + fmtUptime(d.uptime_seconds));
+}
+
+function renderQuota(q) {
+  const body = $("#q-body"); body.replaceChildren();
+  if (q.groups && q.groups.length) {
+    for (const g of q.groups) {
+      const box = el("div", { class: "qgroup" }, el("b", null, g.name), el("div", { class: "mut", style: "font-size:12px" }, "Models: " + g.models.join(", ")));
+      for (const b of g.buckets) {
+        const f = b.remaining_fraction;
+        const row = el("div", { class: "qrow" });
+        const top = el("div", { class: "top" }, el("span", null, b.name.replace(" Remaining", "")), el("span", null, f == null ? "n/a" : (f * 100).toFixed(1) + "% remaining"));
+        row.append(top);
+        if (f != null) row.append(el("div", { class: "bar" }, el("i", { class: barClass(f), style: "width:" + Math.max(1, f * 100) + "%" })));
+        const sub = el("div", { class: "mut", style: "font-size:12px;margin-top:4px" });
+        if (b.reset_time) { const cd = el("b", { class: "cd", "data-reset": b.reset_time }, fmtCountdown(b.reset_in_seconds)); sub.append("resets in ", cd, " (" + new Date(b.reset_time).toLocaleString() + ")"); }
+        else sub.append("Quota available, no reset pending");
+        if (b.bridge_tokens_in_window != null) sub.append(" | used through this bridge in this window: " + fmtNum(b.bridge_tokens_in_window) + " tokens, " + fmtNum(b.bridge_requests_in_window) + " requests" + (b.window_is_approximate ? " (last " + b.window + ")" : ""));
+        row.append(sub); box.append(row);
+      }
+      body.append(box);
+    }
+    body.classList.remove("mut");
+  } else {
+    body.classList.add("mut");
+    body.append(el("div", null, "Plan quota is not available right now: " + (q.error || "unknown reason") + ". Showing only what the bridge itself knows (see the charts and the budget below)."));
+  }
+  if (q.ok === false && q.groups && q.groups.length) body.append(el("div", { class: "err" }, "Last refresh failed (showing the previous reading): " + q.error));
+  if (q.last_quota_error) {
+    const e = q.last_quota_error; const row = el("div", { class: "banner warn", style: "margin-top:10px" }, "Last quota/rate-limit error seen by this bridge: " + new Date(e.at).toLocaleString() + (e.model ? " (" + e.model + ")" : "") + ": " + e.message.slice(0, 220));
+    if (e.reset_at && Date.parse(e.reset_at) > Date.now()) { const cd = el("b", { class: "cd", "data-reset": e.reset_at }, fmtCountdown((Date.parse(e.reset_at) - Date.now()) / 1000)); row.append(" | reset parsed from the error: in ", cd); }
+    body.append(row);
+  }
+  const foot = $("#q-foot"); foot.dataset.fetched = q.fetched_at || "";
+  foot.dataset.src = q.source;
+  tickFoot();
+}
+function tickFoot() {
+  const foot = $("#q-foot"); if (!foot.dataset.src) return;
+  const f = foot.dataset.fetched;
+  setText(foot, "Source: " + foot.dataset.src + (f ? ". Checked " + Math.max(0, Math.round((Date.now() - Date.parse(f)) / 1000)) + " s ago" : ". Not checked yet") + ". Quota is account-wide: use of Antigravity outside this bridge also counts; \"used through this bridge\" only covers this server's own traffic.");
+}
+$("#q-refresh").onclick = async () => {
+  const b = $("#q-refresh"); b.disabled = true; b.textContent = "Checking...";
+  try { renderQuota(await api("POST", "quota/refresh", {})); } catch (e) { alert(e.message); }
+  b.disabled = false; b.textContent = "Refresh now";
+};
+
+function renderBudget(b) {
+  const box = $("#b-status"); box.replaceChildren();
+  if (!b || !b.enabled) { box.append("No budget set. Use it to track an allowance you choose yourself (for example 2M tokens per day)."); return; }
+  const f = b.remaining_fraction;
+  box.append(el("div", { class: "top qrow", style: "display:flex;justify-content:space-between" }, el("span", null, fmtNum(b.remaining_tokens) + " of " + fmtNum(b.config.tokens) + " tokens remaining (" + fmtNum(b.used_tokens) + " used, " + fmtNum(b.requests) + " requests)" + (b.over_budget ? " - OVER BUDGET" : "")), el("span", null, (f * 100).toFixed(1) + "%")));
+  box.append(el("div", { class: "bar" }, el("i", { class: barClass(f), style: "width:" + Math.max(1, f * 100) + "%" })));
+  const cd = el("b", { class: "cd", "data-reset": b.reset_time }, fmtCountdown(b.reset_in_seconds));
+  box.append(el("div", { class: "mut", style: "font-size:12px;margin-top:4px" }, "Self-set budget (not plan quota). Resets in ", cd, " (" + new Date(b.reset_time).toLocaleString() + ")"));
+}
+async function loadBudget() {
+  try {
+    const b = await api("GET", "budget"); const c = b.config;
+    $("#b-tokens").value = c.tokens; $("#b-period").value = c.period; $("#b-time").value = c.reset_time; $("#b-wd").value = String(c.reset_weekday);
+    $("#b-wd-w").classList.toggle("hidden", c.period !== "week"); renderBudget(b);
+  } catch {}
+}
+$("#b-period").onchange = () => $("#b-wd-w").classList.toggle("hidden", $("#b-period").value !== "week");
+$("#b-save").onclick = async () => {
+  setText($("#b-err"), "");
+  try { renderBudget(await api("POST", "budget", { enabled: true, tokens: Number($("#b-tokens").value), period: $("#b-period").value, reset_time: $("#b-time").value, reset_weekday: Number($("#b-wd").value) })); } catch (e) { setText($("#b-err"), e.message); }
+};
+$("#b-off").onclick = async () => { try { renderBudget(await api("DELETE", "budget")); } catch (e) { setText($("#b-err"), e.message); } };
+
+// one-second ticker: uptime clock + every countdown
+setInterval(() => {
+  if (!live) return;
+  const up = (Date.now() - liveStart) / 1000;
+  const u = $("#u-uptime"); if (u) setText(u, fmtUptime(up));
+  setText($("#s-clock"), "up " + fmtUptime(up));
+  for (const c of document.querySelectorAll(".cd")) {
+    const left = (Date.parse(c.dataset.reset) - Date.now()) / 1000;
+    setText(c, left > 0 ? fmtCountdown(left) : "now (refreshing...)");
+  }
+  tickFoot();
+}, 1000);
+
+// ---------- charts (canvas, no libraries)
+const PALETTE = { blue: "#58a6ff", green: "#3fb950", red: "#f85149", amber: "#d29922", grey: "#8b949e" };
+function fmtTick(t, bucket) {
+  const d = new Date(t * 1000);
+  if (bucket <= 300) return pad2(d.getHours()) + ":" + pad2(d.getMinutes());
+  if (bucket <= 3600) return d.toLocaleDateString(undefined, { weekday: "short" }) + " " + pad2(d.getHours()) + ":00";
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " " + pad2(d.getHours()) + ":00";
+}
+function niceMax(v) { if (v <= 0) return 1; const p = Math.pow(10, Math.floor(Math.log10(v))); const n = v / p; return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * p; }
+const charts = {};
+function drawChart(id, cfg) {
+  charts[id] = cfg;
+  const cv = document.getElementById(id), w = cv.clientWidth, h = cv.clientHeight;
+  if (!w) return;
+  const dpr = window.devicePixelRatio || 1; cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+  const c = cv.getContext("2d"); c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, w, h);
+  const L = 50, R = 8, T = 8, B = 22, pw = w - L - R, ph = h - T - B, n = cfg.t.length;
+  let max = 0;
+  for (let i = 0; i < n; i++) {
+    let stack = 0;
+    for (const s of cfg.series) { const v = s.data[i] || 0; if (s.type === "bar" && cfg.stack) stack += v; else max = Math.max(max, v); }
+    max = Math.max(max, stack);
+  }
+  max = niceMax(max);
+  c.font = "11px system-ui,sans-serif"; c.fillStyle = PALETTE.grey; c.strokeStyle = "#2a323d"; c.lineWidth = 1;
+  c.textAlign = "right"; c.textBaseline = "middle";
+  for (let k = 0; k <= 4; k++) { const y = T + ph - ph * k / 4; c.beginPath(); c.moveTo(L, y + .5); c.lineTo(w - R, y + .5); c.stroke(); c.fillText(cfg.fmt(max * k / 4), L - 6, y); }
+  c.textAlign = "center"; c.textBaseline = "top";
+  const ticks = Math.min(6, n);
+  for (let k = 0; k < ticks; k++) { const i = Math.round((n - 1) * k / Math.max(1, ticks - 1)); const x = L + pw * (i + .5) / n; c.fillText(fmtTick(cfg.t[i], cfg.bucket), Math.min(w - 30, Math.max(L + 20, x)), T + ph + 5); }
+  const bw = Math.max(1, pw / n - (n > 120 ? 0 : 1));
+  const X = i => L + pw * (i + .5) / n, Y = v => T + ph - ph * v / max;
+  const bars = cfg.series.filter(s => s.type === "bar");
+  for (let i = 0; i < n; i++) {
+    let base = 0;
+    for (const s of bars) { const v = s.data[i] || 0; if (!v) continue; c.fillStyle = s.color; const y0 = cfg.stack ? Y(base + v) : Y(v); const hh = cfg.stack ? Y(base) - Y(base + v) : T + ph - y0; c.fillRect(X(i) - bw / 2, y0, bw, Math.max(1, hh)); if (cfg.stack) base += v; }
+  }
+  for (const s of cfg.series.filter(s => s.type === "line")) {
+    c.strokeStyle = s.color; c.lineWidth = 1.6; c.setLineDash(s.dashed ? [4, 3] : []); c.beginPath(); let pen = false;
+    for (let i = 0; i < n; i++) { const v = s.data[i]; if (v == null) { pen = false; continue; } const x = X(i), y = Y(v); if (!pen) { c.moveTo(x, y); pen = true; } else if (s.step) { c.lineTo(x, Y(s.data[i - 1] ?? v)); c.lineTo(x, y); } else c.lineTo(x, y); }
+    c.stroke(); c.setLineDash([]);
+  }
+  if (cfg.hover != null) { const x = X(cfg.hover); c.strokeStyle = "#8b949e"; c.beginPath(); c.moveTo(x + .5, T); c.lineTo(x + .5, T + ph); c.stroke(); }
+  cv.dataset.drawn = "1";
+  if (!cv._wired) {
+    cv._wired = true;
+    const tip = el("div", { class: "tip hidden" }); cv.parentElement.append(tip);
+    cv.addEventListener("mousemove", ev => {
+      const cf = charts[id], r = cv.getBoundingClientRect(), x = ev.clientX - r.left;
+      const i = Math.max(0, Math.min(cf.t.length - 1, Math.floor((x - L) / (r.width - L - R) * cf.t.length)));
+      cf.hover = i; drawChart(id, cf);
+      tip.classList.remove("hidden"); tip.replaceChildren(el("div", null, new Date(cf.t[i] * 1000).toLocaleString()), ...cf.series.map(s => el("div", { style: "color:" + s.color }, s.name + ": " + (s.data[i] == null ? "-" : cf.fmt(s.data[i], true)))));
+      tip.style.left = Math.min(r.width - 160, Math.max(0, x + 12)) + "px"; tip.style.top = "6px";
+    });
+    cv.addEventListener("mouseleave", () => { const cf = charts[id]; cf.hover = null; drawChart(id, cf); tip.classList.add("hidden"); });
+  }
+}
+const fmtInt = (v, exact) => exact ? fmtNum(Math.round(v)) : fmtTok(v);
+function redrawCharts() { if (metricsData) renderCharts(metricsData); }
+window.addEventListener("resize", () => { if (curTab === "usage") redrawCharts(); });
+
+function renderCharts(m) {
+  const t = m.series.map(s => s.t), b = m.bucket_seconds;
+  drawChart("ch-tokens", { t, bucket: b, stack: true, fmt: fmtInt, series: [{ name: "prompt", type: "bar", color: PALETTE.blue, data: m.series.map(s => s.prompt_tokens) }, { name: "completion", type: "bar", color: PALETTE.green, data: m.series.map(s => s.completion_tokens) }] });
+  drawChart("ch-req", { t, bucket: b, stack: false, fmt: fmtInt, series: [{ name: "requests", type: "bar", color: PALETTE.blue, data: m.series.map(s => s.requests) }, { name: "errors", type: "bar", color: PALETTE.red, data: m.series.map(s => s.errors) }, { name: "rejected (401)", type: "line", color: PALETTE.amber, data: m.series.map(s => s.rejected) }] });
+  drawChart("ch-lat", { t, bucket: b, fmt: (v, ex) => ex ? Math.round(v) + " ms" : (v >= 1000 ? (v / 1000).toFixed(1) + "s" : Math.round(v)), series: [{ name: "slowest", type: "line", color: PALETTE.grey, dashed: true, data: m.series.map(s => s.latency_max_ms) }, { name: "average", type: "line", color: PALETTE.blue, data: m.series.map(s => s.latency_avg_ms) }] });
+  drawChart("ch-conc", { t, bucket: b, fmt: (v, ex) => ex ? String(Math.round(v)) : String(Math.round(v)), series: [{ name: "queued", type: "line", step: true, color: PALETTE.amber, data: m.series.map(s => s.queued_max) }, { name: "active", type: "line", step: true, color: PALETTE.green, data: m.series.map(s => s.active_max) }] });
+  const tt = m.totals;
+  $("#u-totals").replaceChildren(statBox("requests", fmtNum(tt.requests)), statBox("errors", fmtNum(tt.errors)), statBox("rejected (401)", fmtNum(tt.rejected)), statBox("prompt tokens", fmtTok(tt.prompt_tokens)), statBox("completion tokens", fmtTok(tt.completion_tokens)), statBox("avg latency", m.latency_avg_ms == null ? "-" : (m.latency_avg_ms / 1000).toFixed(1) + " s"), statBox("peak active / queued", m.peak_active + " / " + m.peak_queued));
+  const fill = (sel, rows) => {
+    const tb = $(sel + " tbody"); tb.replaceChildren(); const mx = Math.max(1, ...rows.map(r => r.prompt_tokens + r.completion_tokens));
+    for (const r of rows) {
+      const tok = r.prompt_tokens + r.completion_tokens;
+      const bar = el("div", { class: "hbar" }, el("i", { style: "background:#58a6ff;width:" + (r.prompt_tokens / mx * 100) + "%" }), el("i", { style: "background:#3fb950;width:" + (r.completion_tokens / mx * 100) + "%" }));
+      const td = el("td", null, fmtNum(r.prompt_tokens) + " / " + fmtNum(r.completion_tokens)); td.append(bar);
+      tb.append(el("tr", null, el("td", null, r.name || r.id), el("td", null, fmtNum(r.requests)), el("td", null, fmtNum(r.errors)), td, el("td", null, r.latency_avg_ms == null ? "-" : (r.latency_avg_ms / 1000).toFixed(1) + " s")));
+    }
+    if (!rows.length) tb.append(el("tr", null, el("td", { colspan: 5, class: "mut" }, "No traffic in this range yet.")));
+  };
+  fill("#t-model", m.by_model); fill("#t-key", m.by_key);
+  setText($("#u-updated"), "updated " + new Date().toLocaleTimeString());
+}
+async function loadMetrics() { try { metricsData = await api("GET", "metrics?range=" + range); renderCharts(metricsData); } catch (e) { setText($("#u-updated"), e.message); } }
+$("#u-range").onclick = e => { const r = e.target.dataset && e.target.dataset.r; if (!r) return; range = r; for (const b of $("#u-range").children) b.classList.toggle("on", b === e.target); loadMetrics(); };
+setInterval(() => { if (curTab === "usage" && !document.hidden) loadMetrics(); }, 5000);
 
 // ---------- connect
 function fillConnect() {

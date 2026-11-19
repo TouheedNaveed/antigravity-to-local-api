@@ -9,6 +9,8 @@ import { archiveTurn, ingestConversation, searchMemory, grepMemory, readMemory, 
 import { AgyPool, Limiter, classifyError, setupIsolatedHome, pruneIsolatedHome } from "./agy-pool.mjs";
 import { KeyStore } from "./keys.mjs";
 import { createAdmin } from "./admin.mjs";
+import { Metrics } from "./metrics.mjs";
+import { QuotaMonitor, Budget, parseResetFromMessage } from "./quota.mjs";
 import { normalizeTools, buildPrompt, contentToText, parseModelOutput, formatRetryPrompt, cleanJsonObject, badRequest } from "./tools.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -23,6 +25,8 @@ const DATA_DIR = process.env.AGY_DATA_DIR || path.join(path.dirname(fileURLToPat
 // Default: a key is required for every /v1/* call. AGY_REQUIRE_KEY=0 only opens the API while no keys exist and no AGY_API_KEY is set.
 const REQUIRE_KEY = !["0", "off", "false", "no"].includes((process.env.AGY_REQUIRE_KEY ?? "1").trim().toLowerCase());
 const keyStore = new KeyStore(DATA_DIR);
+const metrics = new Metrics(DATA_DIR);
+const safeMetric = fn => { try { fn(); } catch (e) { console.error("metrics error:", e.message); } };
 
 const CFG = {
   agyBin: process.env.AGY_BIN || path.join(os.homedir(), ".local", "bin", "agy"),
@@ -60,6 +64,8 @@ const MODELS = [
   { id: "gpt-oss-120b-medium", name: "GPT-OSS 120B (Medium)" }
 ];
 
+const budget = new Budget(DATA_DIR, metrics);
+const quota = new QuotaMonitor({ cfg: CFG, metrics, models: MODELS.map(m => m.id), pollMs: num("AGY_QUOTA_POLL_MS", 120000) });
 const stats = { started: Date.now(), requests: 0, ok: 0, failed: 0, retries: 0, timeouts: 0, rateLimited: 0, clientAborts: 0, toolCallResponses: 0, consecutiveFailures: 0, lastError: null };
 let shuttingDown = false;
 const log = (...a) => console.log(`[${new Date().toISOString()}]`, ...a);
@@ -97,10 +103,10 @@ function authenticate(req) {
   const legacyOnly = Boolean(API_KEY);
   if (token && API_KEY) {
     const a = Buffer.from(token), b = Buffer.from(API_KEY);
-    if (a.length === b.length && crypto.timingSafeEqual(a, b)) return { ok: true, key: null };
+    if (a.length === b.length && crypto.timingSafeEqual(a, b)) return { ok: true, key: null, label: "legacy" };
   }
   const enforced = REQUIRE_KEY || keyStore.count() > 0 || legacyOnly;
-  if (!enforced) return { ok: true, key: null };
+  if (!enforced) return { ok: true, key: null, label: "open" };
   if (!token) {
     if (keyStore.count() === 0 && !legacyOnly) return authError(401, "no_api_keys", "No API keys exist yet. Open the dashboard at http://" + HOST + ":" + PORT + "/ to create one, then send it as 'Authorization: Bearer agy-...'.");
     return authError(401, "missing_api_key", "Missing API key. Send it as 'Authorization: Bearer agy-...' (or the 'x-api-key' header). Create one in the dashboard at http://" + HOST + ":" + PORT + "/.");
@@ -110,7 +116,7 @@ function authenticate(req) {
   if (v.error === "revoked") return authError(401, "api_key_revoked", "This API key has been revoked. Create a new key in the dashboard.");
   if (v.error) return authError(401, "invalid_api_key", "Incorrect API key provided. Check the key or create a new one in the dashboard.");
   keyStore.touch(v.record);
-  return { ok: true, key: v.record };
+  return { ok: true, key: v.record, label: v.record.id };
 }
 
 function readBody(req) {
@@ -162,6 +168,9 @@ function errorToResponse(err) {
 }
 
 async function handleChat(req, res, body, auth = null) {
+  const t0 = Date.now();
+  const metricKey = auth?.key?.id || auth?.label || "admin";
+  let outcome = "error";
   const model = String(body.model || MODELS[0].id);
   if (!MODELS.some(m => m.id === model)) return json(res, 400, openAIError(`Unknown model '${model}'. Check GET /v1/models for supported IDs.`, "invalid_request_error", "model_not_found", "model"));
   if (!Array.isArray(body.messages) || body.messages.length === 0) return json(res, 400, openAIError("'messages' must be a non-empty array", "invalid_request_error", null, "messages"));
@@ -287,7 +296,7 @@ async function handleChat(req, res, body, auth = null) {
         throw err;
       }
     }
-    stats.ok++; stats.consecutiveFailures = 0;
+    stats.ok++; stats.consecutiveFailures = 0; outcome = "ok";
     const usage = { prompt_tokens: usageTotal.input, completion_tokens: usageTotal.output, total_tokens: usageTotal.total || usageTotal.input + usageTotal.output };
     const finish = out.calls ? (tools.legacy ? "function_call" : "tool_calls") : "stop";
     if (out.calls) stats.toolCallResponses++;
@@ -322,11 +331,11 @@ async function handleChat(req, res, body, auth = null) {
     if (apiCalls) { if (tools.legacy) message.function_call = apiCalls[0].function; else message.tool_calls = apiCalls; }
     return json(res, 200, { session_id: sessionId, id, object: "chat.completion", created, model, choices: [{ index: 0, message, finish_reason: finish }], usage, x_agy });
   } catch (err) {
-    if (err.code === "aborted" || ac.signal.aborted) { log(`Client disconnected; aborted ${model} request`); return; }
+    if (err.code === "aborted" || ac.signal.aborted) { outcome = "abort"; log(`Client disconnected; aborted ${model} request`); return; }
     const cls = classifyError(err);
     stats.failed++; stats.consecutiveFailures++;
     if (cls === "timeout") stats.timeouts++;
-    if (cls === "rate_limit") stats.rateLimited++;
+    if (cls === "rate_limit") { stats.rateLimited++; safeMetric(() => metrics.recordQuotaError({ model, message: err.message, resetAt: parseResetFromMessage(err.message) })); }
     stats.lastError = { at: new Date().toISOString(), kind: cls, message: String(err.message).slice(0, 200) };
     logErr(`AGY request failed (${cls}) model=${model}: ${String(err.message).slice(-1500)}`);
     const r = errorToResponse(err);
@@ -339,6 +348,7 @@ async function handleChat(req, res, body, auth = null) {
   } finally {
     res.off("close", onClose);
     if (auth?.key && (usageTotal.input || usageTotal.output)) keyStore.addTokens(auth.key, usageTotal.input, usageTotal.output);
+    safeMetric(() => metrics.recordRequest({ model, keyId: metricKey, outcome, promptTokens: usageTotal.input, completionTokens: usageTotal.output, latencyMs: Date.now() - t0 }));
     release();
   }
 }
@@ -347,7 +357,7 @@ function health() {
   const cliExists = fs.existsSync(CFG.agyBin);
   const status = shuttingDown ? "shutting_down" : (!cliExists || stats.consecutiveFailures >= 3) ? "degraded" : "ok";
   return {
-    ok: status === "ok", status, service: "agy-local-api", version: "2.1.0", uptime_seconds: Math.round((Date.now() - stats.started) / 1000),
+    ok: status === "ok", status, service: "agy-local-api", version: "2.2.0", uptime_seconds: Math.round((Date.now() - stats.started) / 1000),
     cli: CFG.agyBin, cli_found: cliExists,
     mode: { isolated_home: CFG.isolate, memory_tools: CFG.memoryTools, tool_calling: "prompt-emulated", prewarm: CFG.prewarm },
     active: limiter.active, queued: limiter.queue.length, max_concurrent: MAX_CONCURRENT, max_queue: MAX_QUEUE,
@@ -360,11 +370,25 @@ function health() {
 
 const modelsList = () => ({ object: "list", data: MODELS.map(m => ({ id: m.id, object: "model", created: 0, owned_by: "agy-cli", name: m.name })) });
 
+function getLive() {
+  const h = health();
+  return {
+    now: new Date().toISOString(), started_at: new Date(stats.started).toISOString(), uptime_seconds: h.uptime_seconds,
+    status: h.status, active: h.active, queued: h.queued, max_concurrent: h.max_concurrent, max_queue: h.max_queue,
+    pool: h.pool, warm_sessions: h.warm_sessions, stats: h.stats, last_error: h.last_error,
+    last_5min: metrics.lastMinutes(5), quota: quota.status(), budget: budget.status()
+  };
+}
+setInterval(() => safeMetric(() => metrics.sampleGauge(limiter.active, limiter.queue.length)), 5000).unref();
+setInterval(() => safeMetric(() => metrics.rollup()), 10 * 60_000).unref();
+
 const admin = createAdmin({
   dataDir: DATA_DIR, keyStore, port: PORT, host: HOST,
   extraHosts: (process.env.AGY_ADMIN_ALLOWED_HOSTS || "").split(",").map(x => x.trim()).filter(Boolean),
   getStatus: () => ({ health: health(), models: modelsList().data, auth: { require_key: REQUIRE_KEY, key_count: keyStore.count(), legacy_env_key: Boolean(API_KEY), base_url: `http://${HOST === "0.0.0.0" ? "127.0.0.1" : HOST}:${PORT}/v1` } }),
-  getModels: modelsList, readBody, handleChat
+  getModels: modelsList, readBody,
+  handleChat: (req, res, body) => handleChat(req, res, body, null),
+  metrics, quota, budget, getLive
 });
 
 const server = http.createServer(async (req, res) => {
@@ -379,7 +403,7 @@ const server = http.createServer(async (req, res) => {
     if (shuttingDown) return json(res, 503, openAIError("Server is shutting down", "server_error", "shutting_down"), { "retry-after": "5" });
     if (url.pathname.startsWith("/v1/memory/")) {
       const auth = authenticate(req);
-      if (!auth.ok) return json(res, auth.status, auth.body, auth.headers);
+      if (!auth.ok) { safeMetric(() => metrics.recordRejected()); return json(res, auth.status, auth.body, auth.headers); }
       if (req.method === "GET" && url.pathname === "/v1/memory/stats") return json(res, 200, memoryStats());
       if (req.method === "GET" && url.pathname === "/v1/memory/dates") return json(res, 200, listMemoryDates({ limit: Number(url.searchParams.get("limit") || 60) }));
       if (req.method !== "POST") return json(res, 405, openAIError("Use POST for memory search/read/ingest endpoints"));
@@ -395,14 +419,14 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === "GET" && url.pathname === "/v1/models") {
       const auth = authenticate(req);
-      if (!auth.ok) return json(res, auth.status, auth.body, auth.headers);
+      if (!auth.ok) { safeMetric(() => metrics.recordRejected()); return json(res, auth.status, auth.body, auth.headers); }
       return json(res, 200, modelsList());
     }
     if (req.method !== "POST" || url.pathname !== "/v1/chat/completions") {
       return json(res, 404, openAIError("Not found. Use GET /v1/models or POST /v1/chat/completions", "invalid_request_error", "not_found"));
     }
     const auth = authenticate(req);
-    if (!auth.ok) return json(res, auth.status, auth.body, auth.headers);
+    if (!auth.ok) { safeMetric(() => metrics.recordRejected()); return json(res, auth.status, auth.body, auth.headers); }
     let body;
     try { body = await readBody(req); }
     catch (err) { return json(res, err.status || 400, openAIError(err.message)); }
@@ -431,6 +455,8 @@ async function shutdown(signal) {
   const deadline = Date.now() + SHUTDOWN_GRACE_MS;
   while ((limiter.active > 0 || limiter.queue.length > 0) && Date.now() < deadline) await new Promise(r => setTimeout(r, 200));
   pool.shutdown();
+  admin.closeLive();
+  safeMetric(() => metrics.close());
   try { keyStore.flush(); } catch (e) { logErr("keys flush failed:", e.message); }
   log("Shutdown complete");
   process.exit(0);

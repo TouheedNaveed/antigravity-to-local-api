@@ -220,3 +220,16 @@ curl http://127.0.0.1:8790/v1/chat/completions \
 New variables: `AGY_REQUIRE_KEY` (default 1), `AGY_DATA_DIR` (default `./data`), `AGY_ADMIN_ALLOWED_HOSTS`.
 
 Limitations: the dashboard speaks plain HTTP on loopback (no TLS); there is a single admin account; sessions live in memory (a restart signs you out); usage counters are written to disk every ~2 s and on shutdown, so a hard kill can lose the last couple of seconds; Cursor's custom base URL setting calls the API from Cursor's servers, so a localhost URL generally does not work there.
+
+## Usage, metrics and quota (v2.2)
+
+The dashboard has a **Usage & quota** tab (and a live uptime clock on **Status**).
+
+- **Live panel**: server uptime, active and queued requests, last-5-minute traffic. Pushed over SSE (`GET /admin/api/live`, every 2 s); the browser ticks the clocks every second.
+- **Charts** (plain canvas, no external libraries): tokens, requests and errors, latency, concurrency and queue, for 1 h / 24 h / 7 d / 30 d, plus breakdowns by model and by API key. `GET /admin/api/metrics?range=1h|24h|7d|30d`.
+- **Storage**: `data/metrics.sqlite` (built-in `node:sqlite`). Per-minute buckets are kept 48 h, then rolled up hourly and kept about 400 days.
+- **Plan quota**: read from the CLI's own `agy -p "/usage"` command (run with the bridge's isolated home, 0 tokens). It reports, per model group (Gemini; Claude and GPT), the remaining fraction and reset time of the 5-hour and weekly limits. The dashboard shows them with a live countdown. Refreshed every `AGY_QUOTA_POLL_MS` (default 120000) or via "Refresh now". Quota is account-wide, so Antigravity use outside this bridge also counts; the "used through this bridge" figure only covers this server's traffic.
+- **Last quota error**: if upstream rejects a request for quota, the message and any reset time parsed from it are shown.
+- **Self-set token budget** (optional): a token budget per day / 5 h / week with a reset time of day, counted from this bridge's own traffic and clearly labelled as self-set. Saved in `data/settings.json`.
+
+Limitations: `/usage` takes a few seconds and needs the desktop keyring session (same as `agy` itself); if it fails, the last error is shown instead of made-up numbers. Metrics only cover requests that went through this bridge.

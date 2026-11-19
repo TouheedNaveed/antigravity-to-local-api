@@ -12,6 +12,12 @@ function killTree(child, signal = "SIGTERM") {
   try { process.kill(-child.pid, signal); } catch { try { child.kill(signal); } catch { /* gone */ } }
 }
 
+/** Register an extra child process (e.g. a quota probe) so shutdown kills it too. */
+export function trackChild(child) {
+  liveChildren.add(child);
+  child.on("close", () => liveChildren.delete(child));
+}
+
 export function killAllChildren() {
   for (const c of liveChildren) killTree(c, "SIGKILL");
 }

@@ -1,14 +1,14 @@
 {
   "name": "agy-local-api",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "private": true,
   "description": "Local OpenAI-compatible API bridge for the installed AGY CLI",
   "type": "module",
   "scripts": {
     "start": "node server.mjs",
     "memory:mcp": "node memory-mcp.mjs",
-    "check": "node --check load-env.mjs && node --check server.mjs && node --check agy-pool.mjs && node --check tools.mjs && node --check keys.mjs && node --check admin.mjs && node --check memory-store.mjs && node --check memory-mcp.mjs && node --test tools.test.mjs keys.test.mjs",
-    "test": "node --test tools.test.mjs keys.test.mjs"
+    "check": "node --check load-env.mjs && node --check server.mjs && node --check agy-pool.mjs && node --check tools.mjs && node --check keys.mjs && node --check admin.mjs && node --check metrics.mjs && node --check quota.mjs && node --check memory-store.mjs && node --check memory-mcp.mjs && node --test tools.test.mjs keys.test.mjs metrics.test.mjs quota.test.mjs",
+    "test": "node --test tools.test.mjs keys.test.mjs metrics.test.mjs quota.test.mjs"
   },
   "engines": {
     "node": ">=22.5.0"
