@@ -12,3 +12,7 @@ memory/*.sqlite
 memory/*.sqlite-*
 memory/raw/
 .DS_Store
+
+# Bridge-scoped AGY home and scratch dir (conversation logs)
+.agy-home/
+.orig/

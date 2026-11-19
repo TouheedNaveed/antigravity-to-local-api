@@ -143,5 +143,42 @@ console.log(result.choices[0].message.content);
 
 - Search, grep, indexing and message retrieval run locally and do not make LLM calls. AGY's reasoning/tool selection and final answer still consume model tokens.
 - Search is full-text (FTS5) plus literal fallback. Semantic/vector search and a local embedding model are not included in this first implementation.
-- AGY must call the registered MCP tools for tool-driven search. The HTTP chat bridge itself does not yet implement OpenAI tools/function-calling payloads.
+- AGY must call the registered MCP tools for tool-driven search. OpenAI tools/function calling for *your* functions is now supported (emulated, see UPGRADE notes below).
 - The API listens on 127.0.0.1 by default and is not exposed to other devices.
+
+## UPGRADE notes (v2.0)
+
+What changed compared with the original bridge:
+
+- **Function calling.** `tools` / `tool_choice` (`auto`, `none`, `required`, or one named function), `parallel_tool_calls`, and the legacy `functions` / `function_call` are accepted. Replies carry `message.tool_calls` with `finish_reason: "tool_calls"` (legacy: `function_call`). Follow-up `role: "tool"` messages and assistant messages that contain `tool_calls` are understood. This is **emulated through the prompt**: the functions and their JSON Schemas are described to the model, which must reply with a `<tool_calls>[...]</tool_calls>` block; the bridge parses it, validates names and arguments against your schemas, and asks the model once to fix an invalid reply. AGY itself never executes anything: the bridge runs it with `--sandbox` and a custom agent with `tools: []`, so only a harmless internal task-list tool remains.
+- **Streaming** (`stream: true`, `stream_options.include_usage`). Plain chat streams live from AGY. Tool-call and JSON-mode replies are produced in full first and then sent as SSE chunks.
+- **`response_format`** `json_object` (and a best-effort `json_schema`): the reply is checked for valid JSON and retried once.
+- **About 83% fewer prompt tokens.** The old ~12.5k tokens per request came from AGY's full coding-agent system prompt, ~20 built-in tools, your global skills and your MCP servers (blender, browse). The bridge now runs AGY in its own `HOME` (`./.agy-home`) with a minimal tool-less agent: the same "Say OK" request costs ~2.1k tokens. Your real `~/.gemini` is not touched. Login still works because AGY keeps credentials in the desktop keyring (via the user D-Bus session), not in `~/.gemini`; the bridge must run inside your logged-in user session.
+- **Reliability.** Bounded queue with a queue-wait timeout, per-turn and startup timeouts, one automatic retry on transient AGY failures (dead process, startup failure, empty reply; never on quota/429 or timeouts), dead workers are discarded and replaced, OpenAI-style error bodies everywhere, client disconnects cancel the AGY run, `/health` reports status/pool/counters (503 while shutting down), and SIGINT/SIGTERM drain in-flight requests then kill every AGY child process.
+- **Concurrency.** Defaults are now 4 concurrent requests and 4 session workers. Each stateless request gets its own fresh single-use AGY process (a ready-to-go one is kept on standby per model, so latency stays low); nothing is shared between concurrent requests. Requests that send `session_id` / `conversation_id` keep a warm AGY conversation as before.
+- **Memory tools are off by default** (`AGY_MEMORY_TOOLS=off`), so the MEMORY TOOL POLICY text and the agy-memory MCP are not sent. Switching them on costs several extra thousand tokens when AGY decides to search.
+
+New / changed environment variables (all in `.env`; see `.env.example`):
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `AGY_MAX_CONCURRENT` | 4 | Parallel AGY runs (was 1) |
+| `AGY_MAX_QUEUE` | 32 | Requests allowed to wait (was 10); more get HTTP 429 |
+| `AGY_QUEUE_TIMEOUT_MS` | 120000 | Max wait in the queue before HTTP 503 |
+| `AGY_TIMEOUT_MS` | 300000 | Per-turn timeout |
+| `AGY_STARTUP_TIMEOUT_MS` | 45000 | Time allowed for an AGY process to become ready |
+| `AGY_RETRIES` | 1 | Retries on transient failures |
+| `AGY_SHUTDOWN_GRACE_MS` | 10000 | How long shutdown waits for in-flight requests |
+| `AGY_MAX_SESSION_WORKERS` | 4 | Warm session conversations kept (was 1) |
+| `AGY_SESSION_IDLE_MS` | 300000 | Idle time before a session worker is closed |
+| `AGY_PREWARM` | 1 | Ready-to-use standby AGY processes per model (0 disables) |
+| `AGY_PREWARM_MAX` | 2 | Total standby processes (each idle one uses ~240 MB RAM) |
+| `AGY_STANDBY_IDLE_MS` | 120000 | Idle standby processes are closed after this |
+| `AGY_ISOLATE` | 1 | `1` = bridge-only HOME + minimal agent; `0` = legacy (global config, ~12k tokens) |
+| `AGY_HOME_DIR` | `./.agy-home` | Where the isolated AGY home lives |
+| `AGY_HOME_RETAIN_HOURS` | 12 | AGY conversation logs older than this are pruned from the isolated home |
+| `AGY_MEMORY_TOOLS` | off | `on` registers the agy-memory MCP for AGY and adds the memory policy text |
+
+Limitations: tool calling relies on the model following the prompt protocol (it worked on all six models in testing, but it is not a native API feature); images are not supported; `n > 1` is rejected; arguments are validated with a small built-in JSON Schema checker (type, enum, required, nested properties/items, min/max); standby processes use RAM while idle; token counts come from AGY and include the bridge's small prompt scaffolding (~100-350 tokens).
+
+Run `npm run check` (syntax checks + unit tests for the tool-call parser). The original files are in `.orig/`, and the untouched code is on the `main` branch.
